@@ -35,7 +35,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-public static class KhaosDiskWalker
+public static class UnrealActionsDiskWalker
 {
 	public static Dictionary<string, long> Sizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 	public static long Files;
@@ -86,7 +86,7 @@ function Format-Gb([double]$Bytes)
 function Get-Size([string]$Path)
 {
 	$Key = $Path.TrimEnd('\')
-	if ([KhaosDiskWalker]::Sizes.ContainsKey($Key)) { return [KhaosDiskWalker]::Sizes[$Key] }
+	if ([UnrealActionsDiskWalker]::Sizes.ContainsKey($Key)) { return [UnrealActionsDiskWalker]::Sizes[$Key] }
 	try
 	{
 		if (Test-Path -LiteralPath $Path -PathType Leaf) { return (Get-Item -LiteralPath $Path -Force).Length }
@@ -109,16 +109,16 @@ foreach ($Drive in $Drives)
 foreach ($Drive in $Drives)
 {
 	Write-Host "Walking $($Drive.DeviceID)\ ..." -ForegroundColor DarkGray
-	[void][KhaosDiskWalker]::Walk("$($Drive.DeviceID)\")
+	[void][UnrealActionsDiskWalker]::Walk("$($Drive.DeviceID)\")
 }
-Write-Host ("Walked {0:N0} files in {1:N0} seconds ({2:N0} folders unreadable)." -f [KhaosDiskWalker]::Files, ((Get-Date) - $Started).TotalSeconds, [KhaosDiskWalker]::Skipped) -ForegroundColor DarkGray
+Write-Host ("Walked {0:N0} files in {1:N0} seconds ({2:N0} folders unreadable)." -f [UnrealActionsDiskWalker]::Files, ((Get-Date) - $Started).TotalSeconds, [UnrealActionsDiskWalker]::Skipped) -ForegroundColor DarkGray
 
 # Largest folders --------------------------------------------------------------------------------
 
 $Threshold = $MinimumGb * 1GB
 do
 {
-	$Big = @([KhaosDiskWalker]::Sizes.GetEnumerator() | Where-Object { $_.Value -ge $Threshold -and $_.Key.Length -gt 3 })
+	$Big = @([UnrealActionsDiskWalker]::Sizes.GetEnumerator() | Where-Object { $_.Value -ge $Threshold -and $_.Key.Length -gt 3 })
 	if ($Big.Count -gt $MaximumLines) { $Threshold *= 2 }
 }
 while ($Big.Count -gt $MaximumLines)

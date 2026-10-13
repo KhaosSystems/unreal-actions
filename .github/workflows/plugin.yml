@@ -1,4 +1,4 @@
-# The whole pipeline for an Unreal Engine code plugin on Fab, built from this repository's actions.
+# The whole pipeline for an Unreal Engine code plugin on Fab, built from the plugin/ actions.
 # A plugin calls it from a short ci.yml; see README.md.
 #
 #   package  GitHub-hosted. Fab checks, then the source zip Fab is given, per engine version.
@@ -66,7 +66,7 @@ jobs:
           if ($Release) { "version=$env:REF_NAME" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii }
 
       - id: package
-        uses: KhaosSystems/unreal-actions/package@v1
+        uses: KhaosSystems/unreal-actions/plugin/package@v1
         with:
           plugin-dir: plugin
           engine-versions: ${{ inputs.engine-versions }}
@@ -104,7 +104,7 @@ jobs:
 
       # Builds the zip, not a checkout, so what passes is exactly what Fab receives.
       - id: build
-        uses: KhaosSystems/unreal-actions/build@v1
+        uses: KhaosSystems/unreal-actions/plugin/build@v1
         with:
           package: dist\${{ needs.package.outputs.plugin }}-${{ needs.package.outputs.version }}-UE${{ matrix.engine }}.zip
           engine-version: ${{ matrix.engine }}
@@ -112,7 +112,7 @@ jobs:
 
       - id: test
         if: inputs.run-tests
-        uses: KhaosSystems/unreal-actions/test@v1
+        uses: KhaosSystems/unreal-actions/plugin/test@v1
         with:
           plugin-dir: ${{ steps.build.outputs.plugin-dir }}
           engine-version: ${{ matrix.engine }}
@@ -168,7 +168,7 @@ jobs:
           path: dist
 
       - id: release
-        uses: KhaosSystems/unreal-actions/release@v1
+        uses: KhaosSystems/unreal-actions/plugin/release@v1
         with:
           plugin-dir: plugin
           packages-dir: dist
@@ -193,7 +193,7 @@ jobs:
           pattern: test-results-*
           path: results
 
-      - uses: KhaosSystems/unreal-actions/badges@v1
+      - uses: KhaosSystems/unreal-actions/plugin/badges@v1
         with:
           plugin-dir: plugin
           engine-versions: ${{ inputs.engine-versions }}

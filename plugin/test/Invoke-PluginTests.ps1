@@ -11,7 +11,7 @@ read from the JSON report rather than the exit code, which does not reflect test
 that matches no tests fails, so a renamed test or a wrong filter cannot pass silently.
 
 .EXAMPLE
-./Invoke-PluginTests.ps1 -PluginDir C:\t\b\out\KhaosDocs -EngineVersion 5.8 -WorkDir C:\t\t
+./Invoke-PluginTests.ps1 -PluginDir C:\t\b\out\MyPlugin -EngineVersion 5.8 -WorkDir C:\t\t
 #>
 [CmdletBinding()]
 param(
@@ -36,7 +36,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib/KhaosPluginCI.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '../../lib/UnrealActions.psm1') -Force
 
 if (-not $ResultsFile) { $ResultsFile = Join-Paths (Get-FullPath $WorkDir) 'test-results.json' }
 function Save-TestResults([int]$Passed, [int]$Failed, [int]$Total, [string]$Note = '')

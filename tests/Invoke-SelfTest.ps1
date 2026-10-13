@@ -11,7 +11,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path $PSScriptRoot -Parent
-Import-Module (Join-Path $Root 'lib/KhaosPluginCI.psm1') -Force
+Import-Module (Join-Path $Root 'lib/UnrealActions.psm1') -Force
 
 $script:Failures = 0
 $script:Passes = 0
@@ -51,7 +51,7 @@ function New-FixturePlugin([string]$Dir)
 	"Version": 1,
 	"VersionName": "0.1",
 	"FriendlyName": "Sample",
-	"CreatedBy": "Khaos Games",
+	"CreatedBy": "Example Studio",
 	"FabURL": "https://www.fab.com/listings/00000000-0000-0000-0000-000000000000",
 	"CanContainContent": true,
 	"Modules": [
@@ -64,8 +64,8 @@ function New-FixturePlugin([string]$Dir)
 	]
 }
 '@
-	New-TestFile "$Dir\Source\SampleEditor\SampleEditor.Build.cs" "// Copyright Khaos Games. All Rights Reserved.`n"
-	New-TestFile "$Dir\Source\SampleEditor\Private\SampleEditor.cpp" "// Copyright Khaos Games. All Rights Reserved.`n"
+	New-TestFile "$Dir\Source\SampleEditor\SampleEditor.Build.cs" "// Copyright Example Studio. All Rights Reserved.`n"
+	New-TestFile "$Dir\Source\SampleEditor\Private\SampleEditor.cpp" "// Copyright Example Studio. All Rights Reserved.`n"
 	New-TestFile "$Dir\Source\ThirdParty\Lib\lib.h" "/* MIT, someone else */`n"
 	New-TestFile "$Dir\Source\ThirdParty\Lib\LICENSE.txt" "MIT`n"
 	New-TestFile "$Dir\Content\Docs\Readme.md" "# Sample`n"
@@ -169,7 +169,7 @@ try
 		@{
 			Name = "Epic's notice left in from a template"
 			Break = { New-TestFile "$Plugin\Source\SampleEditor\Private\New.h" "// Copyright Epic Games, Inc. All Rights Reserved.`n" }
-			Expect = "should name 'Khaos Games'"
+			Expect = "should name 'Example Studio'"
 		}
 		@{
 			Name = 'license file outside ThirdParty'
@@ -323,7 +323,7 @@ try
 	Check 'a bad engine version is rejected' $Threw
 
 	New-FixturePlugin $Plugin
-	New-TestFile "$Plugin\Source\SampleEditor\Private\Extra.cpp" "// Copyright Khaos Games. All Rights Reserved.`n`nint A;`n   `nint B;`n"
+	New-TestFile "$Plugin\Source\SampleEditor\Private\Extra.cpp" "// Copyright Example Studio. All Rights Reserved.`n`nint A;`n   `nint B;`n"
 	New-TestFile "$Plugin\Source\ThirdParty\Lib\big.cpp" "int X;`nint Y;`n"
 	Check 'lines of code count non-blank own source only' ((Measure-PluginSource (Get-PluginDescriptor $Plugin)) -eq 5)
 
@@ -352,7 +352,7 @@ try
 	$null = Invoke-NativeQuiet git @('init', '-q', '--bare', $Remote)
 	$Results = Join-Paths $Temp 'results'
 	New-TestFile "$Results\test-results-UE5.8\test-results.json" '{"engine":"5.8","passed":21,"failed":0,"total":21,"note":""}'
-	$BadgeScript = Join-Path $Root 'badges/Update-Badges.ps1'
+	$BadgeScript = Join-Path $Root 'plugin/badges/Update-Badges.ps1'
 	$First = (& $BadgeScript -PluginDir $Plugin -EngineVersions '5.8' -ResultsDir $Results -Repository 'test/test' -RemoteUrl $Remote 6>&1 | Out-String)
 	$Files = (Invoke-NativeQuiet git @('--git-dir', $Remote, 'ls-tree', '--name-only', 'badges')).Output
 	Check 'badges are pushed to their own branch' ((Same ($Files | Sort-Object) @('loc.json', 'tests.json', 'unreal.json')) -and $First.Contains('Updated the badges')) "$First $Files"

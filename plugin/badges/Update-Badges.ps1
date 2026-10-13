@@ -10,7 +10,7 @@ repositories work: shields.io reads the files without signing in.
 Commits only when a badge changed. Needs a token that can push, in GH_TOKEN.
 
 .EXAMPLE
-./Update-Badges.ps1 -PluginDir ./plugin -EngineVersions 5.8 -ResultsDir ./results -Repository KhaosSystems/KhaosDocs
+./Update-Badges.ps1 -PluginDir ./plugin -EngineVersions 5.8 -ResultsDir ./results -Repository my-org/MyPlugin
 #>
 [CmdletBinding()]
 param(
@@ -28,7 +28,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib/KhaosPluginCI.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '../../lib/UnrealActions.psm1') -Force
 
 if (-not $RemoteUrl)
 {

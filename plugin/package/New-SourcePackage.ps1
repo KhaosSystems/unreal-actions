@@ -12,7 +12,7 @@ These zips are the artifact everything else works from. CI builds and tests the 
 checkout, so what passed is byte for byte what gets uploaded.
 
 .EXAMPLE
-./New-SourcePackage.ps1 -PluginDir ../KhaosDocs -OutDir ./dist -EngineVersions 5.8 -Version 1.2.0
+./New-SourcePackage.ps1 -PluginDir ../MyPlugin -OutDir ./dist -EngineVersions 5.8 -Version 1.2.0
 #>
 [CmdletBinding()]
 param(
@@ -30,7 +30,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib/KhaosPluginCI.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '../../lib/UnrealActions.psm1') -Force
 
 $Engines = ConvertFrom-EngineVersions $EngineVersions
 

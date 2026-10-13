@@ -16,7 +16,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib/KhaosPluginCI.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '../../lib/UnrealActions.psm1') -Force
 
 $Root = Find-UnrealEngine $EngineVersion
 $Build = Get-UnrealEngineBuild $Root

@@ -15,7 +15,7 @@ hosting elsewhere before Fab can fetch them.
 Re-running a release replaces the zips on the existing release rather than failing.
 
 .EXAMPLE
-./Publish-Release.ps1 -PluginDir ./plugin -PackageDir ./dist -Tag v1.2.0 -Repository KhaosSystems/KhaosDocs
+./Publish-Release.ps1 -PluginDir ./plugin -PackageDir ./dist -Tag v1.2.0 -Repository my-org/MyPlugin
 #>
 [CmdletBinding()]
 param(
@@ -27,7 +27,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib/KhaosPluginCI.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '../../lib/UnrealActions.psm1') -Force
 
 $Descriptor = Get-PluginDescriptor $PluginDir
 $Release = ConvertFrom-ReleaseVersion $Tag

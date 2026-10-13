@@ -56,16 +56,16 @@ Folders the runner account must not read, on top of the other runners' folders, 
 protected. The script lists the top-level folders the account could otherwise read.
 
 .EXAMPLE
-.\Install-BuildRunner.ps1 -Target KhaosSystems/KhaosDocs
+.\Install-BuildRunner.ps1 -Target my-org/MyPlugin
 
 .EXAMPLE
-.\Install-BuildRunner.ps1 -Target KhaosSystems -Name unreal -RunnerGroup on-prem-unreal -RunnerName gh-runner-windows-unreal-01
+.\Install-BuildRunner.ps1 -Target my-org -Name unreal -RunnerGroup unreal -RunnerName gh-runner-windows-unreal-01
 
 .EXAMPLE
-.\Install-BuildRunner.ps1 -Target KhaosSystems -Name unreal -RunnerGroup on-prem-unreal -RunnerName gh-runner-windows-unreal-01 -Reinstall
+.\Install-BuildRunner.ps1 -Target my-org -Name unreal -RunnerGroup unreal -RunnerName gh-runner-windows-unreal-01 -Reinstall
 
 .EXAMPLE
-.\Install-BuildRunner.ps1 -Target KhaosSystems/KhaosDocs -ProtectPaths C:\steamcmd, C:\Dev -WhatIf
+.\Install-BuildRunner.ps1 -Target my-org/MyPlugin -ProtectPaths C:\steamcmd, C:\Dev -WhatIf
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -87,7 +87,7 @@ param(
 $ErrorActionPreference = 'Stop'
 # Invoke-WebRequest in Windows PowerShell crawls while it draws a progress bar.
 $ProgressPreference = 'SilentlyContinue'
-Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib/KhaosPluginCI.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '../lib/UnrealActions.psm1') -Force
 # Imported up front with -WhatIf suspended, or it reports every alias the module defines.
 $RequestedWhatIf = $WhatIfPreference
 $WhatIfPreference = $false
@@ -503,7 +503,7 @@ if ($PSCmdlet.ShouldProcess($RunnerDir, "Create, readable only by $QualifiedAcco
 Write-Step 'GitHub Actions runner'
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$Release = Invoke-RestMethod -Uri 'https://api.github.com/repos/actions/runner/releases/latest' -Headers @{ 'User-Agent' = 'KhaosPluginCI' }
+$Release = Invoke-RestMethod -Uri 'https://api.github.com/repos/actions/runner/releases/latest' -Headers @{ 'User-Agent' = 'unreal-actions' }
 $RunnerVersion = $Release.tag_name.TrimStart('v')
 $AssetName = "actions-runner-win-x64-$RunnerVersion.zip"
 $Asset = $Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1

@@ -1,12 +1,13 @@
 # unreal-actions
 
-GitHub Actions for Unreal Engine code plugins sold on Fab. They check a plugin against Fab's
-requirements, build its source zip the way Epic does, run its tests, release it, and keep its
-README badges current.
+GitHub Actions for Unreal Engine projects, grouped by what they work on.
 
-## Use in a plugin
+`plugin/` covers code plugins sold on Fab: it checks a plugin against Fab's requirements, builds
+its source zip the way Epic does, runs its tests, releases it, and keeps its README badges current.
 
-`.github/workflows/ci.yml`:
+## Plugins
+
+`.github/workflows/ci.yml` in the plugin's repository:
 
 ```yaml
 name: CI
@@ -24,7 +25,7 @@ concurrency:
 
 jobs:
   plugin:
-    uses: KhaosSystems/unreal-actions/.github/workflows/unreal-plugin.yml@v1
+    uses: KhaosSystems/unreal-actions/.github/workflows/plugin.yml@v1
     permissions:
       contents: write
     with:
@@ -40,20 +41,18 @@ notice naming the descriptor's `CreatedBy` on the first line of every source fil
 **Release:** push a `vX.Y.Z` tag. The run summary has the project file link and version notes to
 paste into the Fab publisher portal, per engine version.
 
-## Actions
-
 | Action | |
 | --- | --- |
-| [`package`](package/action.yml) | Fab checks, then the source zip Fab is given, per engine version. |
-| [`build`](build/action.yml) | BuildPlugin on that zip against a Launcher-installed engine, plus a strict-includes pass. |
-| [`test`](test/action.yml) | The plugin's automation tests in a headless editor. |
-| [`release`](release/action.yml) | GitHub release, the `release` branch games follow, and the Fab checklist. |
-| [`badges`](badges/action.yml) | Tests, engine versions and lines of code, for the README. Public repositories only. |
+| [`plugin/package`](plugin/package/action.yml) | Fab checks, then the source zip Fab is given, per engine version. |
+| [`plugin/build`](plugin/build/action.yml) | BuildPlugin on that zip against a Launcher-installed engine, plus a strict-includes pass. |
+| [`plugin/test`](plugin/test/action.yml) | The plugin's automation tests in a headless editor. |
+| [`plugin/release`](plugin/release/action.yml) | GitHub release, the `release` branch games follow, and the Fab checklist. |
+| [`plugin/badges`](plugin/badges/action.yml) | Tests, engine versions and lines of code, for the README. Public repositories only. |
 
-[`unreal-plugin.yml`](.github/workflows/unreal-plugin.yml) chains them; a plugin can also use them
-one by one.
+[`plugin.yml`](.github/workflows/plugin.yml) chains them; they can also be used one by one, as
+`KhaosSystems/unreal-actions/plugin/<action>@v1`.
 
-## Badges
+### Badges
 
 ```markdown
 [![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
@@ -63,16 +62,16 @@ one by one.
 [![Release](https://img.shields.io/github/v/release/OWNER/REPO)](https://github.com/OWNER/REPO/releases)
 ```
 
-## Plugins in games
+### Using a plugin in a game
 
-Add the plugin as a submodule tracking its `release` branch, which only ever holds released,
-tested versions:
+Add it as a submodule tracking its `release` branch, which only ever holds released, tested
+versions:
 
 ```bash
 git submodule add -b release https://github.com/OWNER/PLUGIN Plugins/PLUGIN
 ```
 
-and have Dependabot open a pull request when it moves, in the game's `.github/dependabot.yml`:
+and let Dependabot open a pull request when it moves, in the game's `.github/dependabot.yml`:
 
 ```yaml
 version: 2
@@ -82,7 +81,7 @@ updates:
     schedule:
       interval: daily
     allow:
-      - dependency-name: Plugins/Khaos*
+      - dependency-name: Plugins/MyStudio* # your plugins; third-party submodules stay put
 ```
 
 ## Build machine
@@ -91,7 +90,7 @@ Windows with the engine versions from the Epic Games Launcher and Visual Studio'
 up a runner from an elevated PowerShell (`-WhatIf` first shows what it would do):
 
 ```powershell
-.\runner\Install-BuildRunner.ps1 -Target KhaosSystems -Name unreal -RunnerGroup on-prem-unreal -RunnerName gh-runner-windows-unreal-01
+.\runner\Install-BuildRunner.ps1 -Target my-org -Name unreal -RunnerGroup unreal -RunnerName gh-runner-windows-unreal-01
 ```
 
 It runs the runner as a service under its own account, kept out of other runners' folders and
@@ -103,5 +102,5 @@ organization's Settings > Actions > General), and read a pull request before app
 
 ## Changing this repository
 
-Plugins use `@v1`; move that tag once a change has run on a plugin. `tests\Invoke-SelfTest.ps1`
+Callers use `@v1`; move that tag once a change has run on a real project. `tests\Invoke-SelfTest.ps1`
 runs without an engine. Scripts stay ASCII and Windows PowerShell 5.1 compatible.

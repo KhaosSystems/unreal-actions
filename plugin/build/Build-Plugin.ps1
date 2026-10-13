@@ -15,7 +15,7 @@ Compiler errors and warnings in the plugin's own sources are reported as annotat
 original file, so they show up on the pull request diff.
 
 .EXAMPLE
-./Build-Plugin.ps1 -PackageZip ./dist/KhaosDocs-0.2.0-UE5.8.zip -EngineVersion 5.8 -WorkDir C:\t\b -StrictIncludes
+./Build-Plugin.ps1 -PackageZip ./dist/MyPlugin-1.2.0-UE5.8.zip -EngineVersion 5.8 -WorkDir C:\t\b -StrictIncludes
 #>
 [CmdletBinding()]
 param(
@@ -34,7 +34,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'lib/KhaosPluginCI.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '../../lib/UnrealActions.psm1') -Force
 
 $EngineRoot = Find-UnrealEngine $EngineVersion
 $RunUAT = Join-Paths $EngineRoot 'Engine' 'Build' 'BatchFiles' 'RunUAT.bat'
