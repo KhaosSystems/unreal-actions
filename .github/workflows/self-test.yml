@@ -1,0 +1,27 @@
+name: Self-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    name: Script tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - shell: powershell
+        run: .\tests\Invoke-SelfTest.ps1
+
+  workflows:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color

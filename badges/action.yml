@@ -1,0 +1,36 @@
+name: Unreal plugin badges
+description: Publish tests, supported engine versions and lines of code as shields.io badges on a branch of their own. Public repositories only.
+
+inputs:
+  plugin-dir:
+    description: The plugin checkout.
+    default: .
+  engine-versions:
+    description: Engine versions, as a JSON array or comma list.
+    required: true
+  results-dir:
+    description: Folder with the test action's results files, in any subfolders.
+    default: ''
+  branch:
+    description: Branch the badge files are written to.
+    default: badges
+  repository:
+    description: owner/repo.
+    default: ${{ github.repository }}
+  token:
+    description: Token that can push the branch.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - shell: powershell
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PLUGIN_DIR: ${{ inputs.plugin-dir }}
+        ENGINE_VERSIONS: ${{ inputs.engine-versions }}
+        RESULTS_DIR: ${{ inputs.results-dir }}
+        BRANCH: ${{ inputs.branch }}
+        REPOSITORY: ${{ inputs.repository }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH\Update-Badges.ps1" -PluginDir $env:PLUGIN_DIR -EngineVersions $env:ENGINE_VERSIONS -ResultsDir $env:RESULTS_DIR -Repository $env:REPOSITORY -Branch $env:BRANCH

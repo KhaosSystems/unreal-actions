@@ -1,0 +1,236 @@
+# The whole pipeline for an Unreal Engine code plugin on Fab, built from this repository's actions.
+# A plugin calls it from a short ci.yml; see README.md.
+#
+#   package  GitHub-hosted. Fab checks, then the source zip Fab is given, per engine version.
+#   build    Build machine. BuildPlugin on that zip, then the automation tests on the result.
+#   release  On a vX.Y.Z tag, once every engine passed: GitHub release, release branch, Fab checklist.
+#   badges   On the default branch of a public repository: tests, engines and lines of code.
+#   notify   Optional Discord message for releases and failures.
+#
+# A pull request from an outside contributor runs none of this until a maintainer has read it and
+# approved the run: the organization requires approval for all outside contributors.
+name: Unreal plugin
+
+on:
+  workflow_call:
+    inputs:
+      engine-versions:
+        description: JSON array of engine versions to build, test and package for, e.g. '["5.7", "5.8"]'.
+        type: string
+        default: '["5.8"]'
+      run-tests:
+        description: Run the plugin's automation tests in a headless editor.
+        type: boolean
+        default: true
+      test-filter:
+        description: Automation test filter. Defaults to the plugin name.
+        type: string
+        default: ''
+      strict-includes:
+        description: Also compile without unity builds or shared precompiled headers.
+        type: boolean
+        default: true
+      build-runner:
+        description: JSON array of labels for the build machine, which has the engines installed from the Epic Games Launcher.
+        type: string
+        default: '["self-hosted", "Windows", "unreal"]'
+    secrets:
+      discord-webhook-url:
+        description: Discord webhook for release and failure notices. Optional.
+        required: false
+
+jobs:
+  package:
+    name: Validate and package
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      plugin: ${{ steps.package.outputs.plugin }}
+      version: ${{ steps.package.outputs.version }}
+      release: ${{ steps.kind.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: plugin
+
+      # A tag like v1.2.3 is a release: its version is stamped into the zips and they are published.
+      - id: kind
+        shell: powershell
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $Release = ($env:REF_TYPE -eq 'tag' -and $env:REF_NAME -match '^v\d')
+          "release=$($Release.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+          if ($Release) { "version=$env:REF_NAME" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii }
+
+      - id: package
+        uses: KhaosSystems/unreal-actions/package@v1
+        with:
+          plugin-dir: plugin
+          engine-versions: ${{ inputs.engine-versions }}
+          version: ${{ steps.kind.outputs.version }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: source-packages
+          path: dist/
+          if-no-files-found: error
+
+  build:
+    name: Build and test (UE ${{ matrix.engine }})
+    needs: package
+    runs-on: ${{ fromJSON(inputs.build-runner) }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      # Concurrent BuildPlugin runs on one machine share UnrealBuildTool state and fail spuriously.
+      max-parallel: 1
+      matrix:
+        engine: ${{ fromJSON(inputs.engine-versions) }}
+    steps:
+      # The workspace survives between jobs on a self-hosted runner.
+      - name: Clear previous packages
+        shell: powershell
+        run: if (Test-Path dist) { Remove-Item dist -Recurse -Force }
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: source-packages
+          path: dist
+
+      # Builds the zip, not a checkout, so what passes is exactly what Fab receives.
+      - id: build
+        uses: KhaosSystems/unreal-actions/build@v1
+        with:
+          package: dist\${{ needs.package.outputs.plugin }}-${{ needs.package.outputs.version }}-UE${{ matrix.engine }}.zip
+          engine-version: ${{ matrix.engine }}
+          strict-includes: ${{ inputs.strict-includes }}
+
+      - id: test
+        if: inputs.run-tests
+        uses: KhaosSystems/unreal-actions/test@v1
+        with:
+          plugin-dir: ${{ steps.build.outputs.plugin-dir }}
+          engine-version: ${{ matrix.engine }}
+          filter: ${{ inputs.test-filter }}
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs-UE${{ matrix.engine }}
+          path: |
+            ${{ runner.temp }}\b\logs
+            ${{ runner.temp }}\t\logs
+            ${{ runner.temp }}\t\report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload test results
+        if: always() && inputs.run-tests
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-UE${{ matrix.engine }}
+          path: ${{ runner.temp }}\t\test-results.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Prebuilt for Win64, for anyone on the team who wants the plugin without compiling it.
+      - name: Upload built plugin
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ needs.package.outputs.plugin }}-UE${{ matrix.engine }}-Win64
+          path: ${{ steps.build.outputs.plugin-dir }}
+          retention-days: 14
+
+  release:
+    name: Publish release
+    needs: [package, build]
+    if: needs.package.outputs.release == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    outputs:
+      url: ${{ steps.release.outputs.url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: plugin
+          fetch-depth: 0 # release notes are the commits since the previous tag
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: source-packages
+          path: dist
+
+      - id: release
+        uses: KhaosSystems/unreal-actions/release@v1
+        with:
+          plugin-dir: plugin
+          packages-dir: dist
+
+  badges:
+    name: Badges
+    needs: [package, build]
+    # Also after a failed build, so the badges show it. shields.io can only read public repositories.
+    if: >-
+      always() && needs.package.result == 'success' && github.event_name == 'push'
+      && github.ref_name == github.event.repository.default_branch && !github.event.repository.private
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: plugin
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: test-results-*
+          path: results
+
+      - uses: KhaosSystems/unreal-actions/badges@v1
+        with:
+          plugin-dir: plugin
+          engine-versions: ${{ inputs.engine-versions }}
+          results-dir: results
+
+  notify:
+    name: Notify
+    needs: [package, build, release]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Send Discord message
+        env:
+          WEBHOOK: ${{ secrets.discord-webhook-url }}
+          PLUGIN: ${{ needs.package.outputs.plugin }}
+          VERSION: ${{ needs.package.outputs.version }}
+          RESULTS: ${{ needs.package.result }} ${{ needs.build.result }} ${{ needs.release.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          RELEASE_URL: ${{ needs.release.outputs.url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REF: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          [ -n "$WEBHOOK" ] || exit 0
+          if [ "$RELEASE_RESULT" = success ]; then
+            title="${PLUGIN} ${VERSION} is ready for Fab"
+            description="Built and tested. Release: ${RELEASE_URL}
+          The run summary has the links and version notes to paste into the Fab portal: ${RUN_URL}"
+            color=3066993
+          elif [[ " $RESULTS " == *" failure "* ]]; then
+            title="${PLUGIN:-$REPOSITORY} CI failed on ${REF}"
+            description="${RUN_URL}"
+            color=15158332
+          else
+            exit 0
+          fi
+          jq -n --arg title "$title" --arg description "$description" --argjson color "$color" \
+            '{username: "GitHub Actions", embeds: [{title: $title, description: $description, color: $color}]}' |
+            curl --fail --silent --show-error -H 'Content-Type: application/json' -d @- "$WEBHOOK"

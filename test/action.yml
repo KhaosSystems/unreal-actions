@@ -1,0 +1,51 @@
+name: Test Unreal plugin
+description: Run a built plugin's automation tests in a headless editor and report the results.
+
+inputs:
+  plugin-dir:
+    description: The packaged plugin from the build action.
+    required: true
+  engine-version:
+    description: Engine version, e.g. 5.8.
+    required: true
+  filter:
+    description: Automation test filter. Defaults to the plugin name, so name tests '<Plugin>.<Area>.<Case>'.
+    default: ''
+  work-dir:
+    description: Scratch folder. Defaults to t in the runner's temp folder.
+    default: ''
+  cache-dir:
+    description: Where the editor keeps its derived data cache. Defaults to .ue-cache/UE<version> in the workspace.
+    default: ''
+
+outputs:
+  passed:
+    description: Tests that passed.
+    value: ${{ steps.test.outputs.passed }}
+  failed:
+    description: Tests that failed.
+    value: ${{ steps.test.outputs.failed }}
+  total:
+    description: Tests that ran.
+    value: ${{ steps.test.outputs.total }}
+  results-file:
+    description: The counts as JSON, written whatever the outcome; the badges action reads these.
+    value: ${{ steps.test.outputs.results-file }}
+
+runs:
+  using: composite
+  steps:
+    - id: test
+      shell: powershell
+      env:
+        ENGINE: ${{ inputs.engine-version }}
+        PLUGIN_DIR: ${{ inputs.plugin-dir }}
+        FILTER: ${{ inputs.filter }}
+        WORK_DIR: ${{ inputs.work-dir }}
+        CACHE_DIR: ${{ inputs.cache-dir }}
+      run: |
+        $WorkDir = $env:WORK_DIR
+        if (-not $WorkDir) { $WorkDir = "$env:RUNNER_TEMP\t" }
+        $CacheDir = $env:CACHE_DIR
+        if (-not $CacheDir) { $CacheDir = "$env:GITHUB_WORKSPACE\.ue-cache\UE$env:ENGINE" }
+        & "$env:GITHUB_ACTION_PATH\Invoke-PluginTests.ps1" -PluginDir $env:PLUGIN_DIR -EngineVersion $env:ENGINE -WorkDir $WorkDir -CacheDir $CacheDir -Filter $env:FILTER

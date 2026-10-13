@@ -1,0 +1,37 @@
+name: Package Unreal plugin
+description: Check an Unreal Engine code plugin against Fab's requirements and write the source zip Fab is given, one per engine version.
+
+inputs:
+  plugin-dir:
+    description: Folder holding the .uplugin.
+    default: .
+  engine-versions:
+    description: Engine versions, as a JSON array or comma list, e.g. '["5.7", "5.8"]'.
+    required: true
+  version:
+    description: Release version such as v1.2.3, stamped into the zips. Empty keeps the descriptor's own.
+    default: ''
+  out-dir:
+    description: Where the zips are written.
+    default: dist
+
+outputs:
+  plugin:
+    description: Plugin name.
+    value: ${{ steps.package.outputs.plugin }}
+  version:
+    description: Version written into the zips.
+    value: ${{ steps.package.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - id: package
+      shell: powershell
+      env:
+        PLUGIN_DIR: ${{ inputs.plugin-dir }}
+        ENGINE_VERSIONS: ${{ inputs.engine-versions }}
+        RELEASE_VERSION: ${{ inputs.version }}
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH\New-SourcePackage.ps1" -PluginDir $env:PLUGIN_DIR -OutDir $env:OUT_DIR -EngineVersions $env:ENGINE_VERSIONS -Version $env:RELEASE_VERSION

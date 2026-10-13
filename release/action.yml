@@ -1,0 +1,38 @@
+name: Release Unreal plugin
+description: Publish tested source zips as a GitHub release, move the release branch games follow, and write the Fab submission checklist.
+
+inputs:
+  plugin-dir:
+    description: The plugin checkout, with full history for the release notes.
+    default: .
+  packages-dir:
+    description: Folder with the zips from the package action.
+    default: dist
+  tag:
+    description: Release tag, vX.Y.Z.
+    default: ${{ github.ref_name }}
+  repository:
+    description: owner/repo to release in.
+    default: ${{ github.repository }}
+  token:
+    description: Token that can create releases and push branches.
+    default: ${{ github.token }}
+
+outputs:
+  url:
+    description: The release page.
+    value: ${{ steps.release.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - id: release
+      shell: powershell
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PLUGIN_DIR: ${{ inputs.plugin-dir }}
+        PACKAGES_DIR: ${{ inputs.packages-dir }}
+        TAG: ${{ inputs.tag }}
+        REPOSITORY: ${{ inputs.repository }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH\Publish-Release.ps1" -PluginDir $env:PLUGIN_DIR -PackageDir $env:PACKAGES_DIR -Tag $env:TAG -Repository $env:REPOSITORY

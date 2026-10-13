@@ -1,0 +1,52 @@
+name: Build Unreal plugin
+description: Compile a plugin source zip with BuildPlugin against a Launcher-installed engine, as Fab does. Fails first if the engine is missing.
+
+inputs:
+  package:
+    description: The source zip from the package action.
+    required: true
+  engine-version:
+    description: Engine version, e.g. 5.8.
+    required: true
+  strict-includes:
+    description: Also compile without unity builds or shared precompiled headers.
+    default: 'true'
+  work-dir:
+    description: Scratch folder; keep it short. Defaults to b in the runner's temp folder.
+    default: ''
+  cache-dir:
+    description: Where UnrealBuildTool keeps its caches. Defaults to .ue-cache/UE<version> in the workspace.
+    default: ''
+
+outputs:
+  plugin-dir:
+    description: The packaged plugin, with binaries.
+    value: ${{ steps.build.outputs.plugin-dir }}
+  engine-root:
+    description: Where the engine is installed.
+    value: ${{ steps.engine.outputs.root }}
+
+runs:
+  using: composite
+  steps:
+    - id: engine
+      shell: powershell
+      env:
+        ENGINE: ${{ inputs.engine-version }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH\Find-UnrealEngine.ps1" -EngineVersion $env:ENGINE
+
+    - id: build
+      shell: powershell
+      env:
+        ENGINE: ${{ inputs.engine-version }}
+        PACKAGE: ${{ inputs.package }}
+        STRICT_INCLUDES: ${{ inputs.strict-includes }}
+        WORK_DIR: ${{ inputs.work-dir }}
+        CACHE_DIR: ${{ inputs.cache-dir }}
+      run: |
+        $WorkDir = $env:WORK_DIR
+        if (-not $WorkDir) { $WorkDir = "$env:RUNNER_TEMP\b" }
+        $CacheDir = $env:CACHE_DIR
+        if (-not $CacheDir) { $CacheDir = "$env:GITHUB_WORKSPACE\.ue-cache\UE$env:ENGINE" }
+        & "$env:GITHUB_ACTION_PATH\Build-Plugin.ps1" -PackageZip $env:PACKAGE -EngineVersion $env:ENGINE -WorkDir $WorkDir -CacheDir $CacheDir -StrictIncludes:($env:STRICT_INCLUDES -eq 'true')
