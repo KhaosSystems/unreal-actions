@@ -362,6 +362,91 @@ try
 	$Commits = (Invoke-NativeQuiet git @('--git-dir', $Remote, 'rev-list', '--count', 'badges')).Output
 	Check 'unchanged badges make no commit' ($Second.Contains('Badges unchanged') -and $Commits -eq '1') "$Second $Commits"
 
+	Write-Host 'Conventional commits'
+	$Cases = @(
+		,@('feat: outline panel', 'feat', $false)
+		,@('fix(ui): crash on save', 'fix', $false)
+		,@('feat!: drop 5.6', 'feat', $true)
+		,@('chore(deps)!: bump', 'chore', $true)
+		,@('Fix: capitalised type', 'fix', $false)
+	)
+	foreach ($Case in $Cases)
+	{
+		$Parsed = ConvertFrom-ConventionalCommit $Case[0]
+		Check "'$($Case[0])' is $($Case[1]), breaking $($Case[2])" ($Parsed -and $Parsed.Type -eq $Case[1] -and $Parsed.Breaking -eq $Case[2])
+	}
+	Check 'a BREAKING CHANGE footer is breaking' ((ConvertFrom-ConventionalCommit "refactor: rename`n`nBREAKING CHANGE: API renamed").Breaking)
+	Check 'the footer token is case sensitive' (-not (ConvertFrom-ConventionalCommit "refactor: rename`n`nbreaking change: no").Breaking)
+	foreach ($Message in @('fixed stuff', 'feat:no space', 'feat(): empty scope', 'Merge branch main'))
+	{
+		Check "'$Message' is not a conventional commit" ($null -eq (ConvertFrom-ConventionalCommit $Message))
+	}
+
+	function New-TestRepo([string]$Name)
+	{
+		$Dir = Join-Paths $Temp $Name
+		New-Item -ItemType Directory -Path $Dir -Force | Out-Null
+		$null = Invoke-NativeQuiet git @('-C', $Dir, 'init', '-q')
+		return $Dir
+	}
+	function Add-TestCommit([string]$Dir, [string]$Message, [string]$Tag)
+	{
+		$Parts = $Message -split "`n`n", 2
+		$Arguments = @('-C', $Dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', $Parts[0])
+		if ($Parts.Count -gt 1) { $Arguments += @('-m', $Parts[1]) }
+		$null = Invoke-NativeQuiet git $Arguments
+		if ($Tag) { $null = Invoke-NativeQuiet git @('-C', $Dir, 'tag', $Tag) }
+		return ((Invoke-NativeQuiet git @('-C', $Dir, 'rev-parse', 'HEAD')).Output | Select-Object -First 1)
+	}
+
+	Write-Host 'Next version'
+	$Repo = New-TestRepo 'versions'
+	$null = Add-TestCommit $Repo 'feat: first' 'v0.1.0'
+
+	$null = Add-TestCommit $Repo 'fix: small'
+	$Next = Get-NextVersion -RepoDir $Repo
+	Check 'a fix bumps the patch' ($Next.Version -eq '0.1.1' -and $Next.Bump -eq 'patch' -and $Next.Previous -eq 'v0.1.0') "$($Next.Version) $($Next.Bump) $($Next.Previous)"
+
+	$C3 = Add-TestCommit $Repo 'feat: bigger'
+	$Next = Get-NextVersion -RepoDir $Repo
+	Check 'a feature bumps the minor' ($Next.Version -eq '0.2.0' -and $Next.Bump -eq 'minor') "$($Next.Version)"
+	$null = Invoke-NativeQuiet git @('-C', $Repo, 'tag', 'v0.2.0')
+	Check 'a commit already released has nothing to release' ((Get-NextVersion -RepoDir $Repo -Ref $C3).Bump -eq 'none')
+
+	$C4 = Add-TestCommit $Repo 'fix!: breaking while still 0.x'
+	$Next = Get-NextVersion -RepoDir $Repo
+	Check 'a breaking change bumps the minor while 0.x' ($Next.Version -eq '0.3.0' -and $Next.Bump -eq 'minor') "$($Next.Version)"
+	$null = Invoke-NativeQuiet git @('-C', $Repo, 'tag', 'v1.0.0')
+
+	$null = Add-TestCommit $Repo "refactor: new API`n`nBREAKING CHANGE: the old one is gone"
+	$Next = Get-NextVersion -RepoDir $Repo
+	Check 'a breaking change bumps the major from 1.0' ($Next.Version -eq '2.0.0' -and $Next.Bump -eq 'major') "$($Next.Version)"
+	$null = Invoke-NativeQuiet git @('-C', $Repo, 'tag', 'v2.0.0')
+
+	$null = Add-TestCommit $Repo 'ci: pipeline' 'v3.0.0-rc.1'
+	$null = Add-TestCommit $Repo 'docs: guide'
+	$Next = Get-NextVersion -RepoDir $Repo
+	Check 'housekeeping alone makes no release' ($Next.Version -eq '' -and $Next.Bump -eq 'none')
+	Check 'prerelease tags are not a base' ($Next.Previous -eq 'v2.0.0') "$($Next.Previous)"
+	$Untagged = New-TestRepo 'untagged'
+	$null = Add-TestCommit $Untagged 'fix: only'
+	Check 'with no tags yet, versions start from 0.0.0' ((Get-NextVersion -RepoDir $Untagged).Version -eq '0.0.1')
+
+	$Notes = Get-ReleaseNotes -RepoDir $Repo -Ref $C4
+	Check 'breaking changes get their own section' ($Notes -match '(?m)^### Breaking changes\n- breaking while still 0\.x \(') $Notes
+
+	Write-Host 'Commit check'
+	$Messy = New-TestRepo 'messy'
+	$Base = Add-TestCommit $Messy 'chore: start'
+	foreach ($Message in @('feat: good', 'fixed stuff', 'feature: wrong type', 'Revert "feat: good"', 'fix(ui): also good'))
+	{
+		$null = Add-TestCommit $Messy $Message
+	}
+	$script:Bad = 0
+	$Annotations = Get-Annotations { $script:Bad = Test-ConventionalCommits -RepoDir $Messy -Range "$Base..HEAD" }
+	Check 'only the non-conventional commits are reported' ($script:Bad -eq 2 -and $Annotations.Count -eq 2) ($Annotations -join "`n")
+	Check 'a wrong type is named' (@($Annotations | Where-Object { $_ -match "type 'feature'" }).Count -eq 1)
+
 	Write-Host 'Release notes'
 	$Repo = Join-Paths $Temp 'repo'
 	New-Item -ItemType Directory -Path $Repo -Force | Out-Null

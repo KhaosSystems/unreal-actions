@@ -1,9 +1,12 @@
 # The whole pipeline for an Unreal Engine code plugin on Fab, built from the plugin/ actions.
 # A plugin calls it from a short ci.yml; see README.md.
 #
+#   commits  GitHub-hosted. Pull requests and pushes: every commit message is a conventional commit.
 #   package  GitHub-hosted. Fab checks, then the source zip Fab is given, per engine version.
 #   build    Build machine. BuildPlugin on that zip, then the automation tests on the result.
-#   release  On a vX.Y.Z tag, once every engine passed: GitHub release, release branch, Fab checklist.
+#   release  Once every engine passed, for a run with release set (the next version comes from the
+#            commit messages) or a pushed vX.Y.Z tag: GitHub release and tag, release branch, Fab
+#            checklist.
 #   badges   On the default branch of a public repository: tests, engines and lines of code.
 #   notify   Optional Discord message for releases and failures.
 #
@@ -34,12 +37,34 @@ on:
         description: JSON array of labels for the build machine, which has the engines installed from the Epic Games Launcher.
         type: string
         default: '["self-hosted", "Windows", "unreal"]'
+      release:
+        description: Release the next version, worked out from the commit messages since the last release. Default branch only.
+        type: boolean
+        default: false
     secrets:
       discord-webhook-url:
         description: Discord webhook for release and failure notices. Optional.
         required: false
 
 jobs:
+  commits:
+    name: Commit messages
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch')
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: plugin
+          fetch-depth: 0
+
+      - uses: KhaosSystems/unreal-actions/commits/check@v1
+        with:
+          repo-dir: plugin
+          base: ${{ github.event.pull_request.base.sha || github.event.before }}
+          head: ${{ github.event.pull_request.head.sha || github.sha }}
+
   package:
     name: Validate and package
     runs-on: windows-latest
@@ -49,28 +74,51 @@ jobs:
       plugin: ${{ steps.package.outputs.plugin }}
       version: ${{ steps.package.outputs.version }}
       release: ${{ steps.kind.outputs.release }}
+      tag: ${{ steps.kind.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
           path: plugin
+          fetch-depth: 0 # the next version is worked out from the commits since the last tag
 
-      # A tag like v1.2.3 is a release: its version is stamped into the zips and they are published.
+      - id: next
+        if: inputs.release
+        uses: KhaosSystems/unreal-actions/commits/next-version@v1
+        with:
+          repo-dir: plugin
+          fail-if-none: 'true'
+
+      # A release either comes from the release input, with the version worked out above, or from
+      # a pushed vX.Y.Z tag. Its version is stamped into the zips and they are published.
       - id: kind
         shell: powershell
         env:
+          RELEASE_INPUT: ${{ inputs.release }}
+          NEXT_TAG: ${{ steps.next.outputs.tag }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          $Release = ($env:REF_TYPE -eq 'tag' -and $env:REF_NAME -match '^v\d')
+          $Tag = ''
+          if ($env:RELEASE_INPUT -eq 'true')
+          {
+            if ($env:REF_NAME -ne $env:DEFAULT_BRANCH) { throw "Release from $env:DEFAULT_BRANCH, not $env:REF_NAME." }
+            $Tag = $env:NEXT_TAG
+          }
+          elseif ($env:REF_TYPE -eq 'tag' -and $env:REF_NAME -match '^v\d')
+          {
+            $Tag = $env:REF_NAME
+          }
+          $Release = [bool]$Tag
           "release=$($Release.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
-          if ($Release) { "version=$env:REF_NAME" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii }
+          "tag=$Tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
 
       - id: package
         uses: KhaosSystems/unreal-actions/plugin/package@v1
         with:
           plugin-dir: plugin
           engine-versions: ${{ inputs.engine-versions }}
-          version: ${{ steps.kind.outputs.version }}
+          version: ${{ steps.kind.outputs.tag }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -172,6 +220,8 @@ jobs:
         with:
           plugin-dir: plugin
           packages-dir: dist
+          tag: ${{ needs.package.outputs.tag }}
+          target: ${{ github.sha }}
 
   badges:
     name: Badges

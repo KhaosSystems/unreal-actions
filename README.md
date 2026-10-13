@@ -4,6 +4,7 @@ GitHub Actions for Unreal Engine projects, grouped by what they work on.
 
 `plugin/` covers code plugins sold on Fab: it checks a plugin against Fab's requirements, builds
 its source zip the way Epic does, runs its tests, releases it, and keeps its README badges current.
+`commits/` checks commit messages and works out version numbers from them.
 
 ## Plugins
 
@@ -18,10 +19,15 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: Release the next version
+        type: boolean
+        default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch') }}
 
 jobs:
   plugin:
@@ -30,6 +36,7 @@ jobs:
       contents: write
     with:
       engine-versions: '["5.8"]'
+      release: ${{ inputs.release == true }}
     secrets:
       discord-webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
 ```
@@ -38,8 +45,15 @@ The plugin needs a `PlatformAllowList` on every module, a `Config/FilterPlugin.i
 notice naming the descriptor's `CreatedBy` on the first line of every source file, and tests named
 `<Plugin>.<Area>.<Case>`. The first run says what is missing.
 
-**Release:** push a `vX.Y.Z` tag. The run summary has the project file link and version notes to
-paste into the Fab publisher portal, per engine version.
+**Commits** are [conventional commits](https://www.conventionalcommits.org), such as
+`fix: crash when saving` or `feat(ui): outline panel`; every pull request and push checks them.
+
+**Release:** Actions > CI > Run workflow on `main`, with *Release the next version* ticked. The
+version comes from the commits since the last release: `feat` bumps the minor version; `fix`,
+`perf` and `revert` the patch; a breaking change (`feat!:`, or a `BREAKING CHANGE:` footer) the
+major, or the minor before 1.0. Commits of other types alone release nothing. The run builds,
+tests, tags and publishes; its summary has the project file link and version notes to paste into
+the Fab publisher portal. Pushing a `vX.Y.Z` tag yourself still works too.
 
 | Action | |
 | --- | --- |
@@ -49,8 +63,11 @@ paste into the Fab publisher portal, per engine version.
 | [`plugin/release`](plugin/release/action.yml) | GitHub release, the `release` branch games follow, and the Fab checklist. |
 | [`plugin/badges`](plugin/badges/action.yml) | Tests, engine versions and lines of code, for the README. Public repositories only. |
 
+| [`commits/check`](commits/check/action.yml) | Fails when a commit message is not a conventional commit. |
+| [`commits/next-version`](commits/next-version/action.yml) | The next semver version from the commits since the last release. |
+
 [`plugin.yml`](.github/workflows/plugin.yml) chains them; they can also be used one by one, as
-`KhaosSystems/unreal-actions/plugin/<action>@v1`.
+`KhaosSystems/unreal-actions/<group>/<action>@v1`.
 
 ### Badges
 

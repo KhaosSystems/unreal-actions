@@ -1,0 +1,24 @@
+name: Check commit messages
+description: Fail when a commit is not a conventional commit, which versions and release notes are worked out from.
+
+inputs:
+  repo-dir:
+    description: The repository, checked out with history (fetch-depth 0).
+    default: .
+  base:
+    description: The commit before the range, such as a pull request's base. Empty skips the check.
+    default: ''
+  head:
+    description: The last commit of the range.
+    default: HEAD
+
+runs:
+  using: composite
+  steps:
+    - shell: powershell
+      env:
+        REPO_DIR: ${{ inputs.repo-dir }}
+        BASE: ${{ inputs.base }}
+        HEAD_REF: ${{ inputs.head }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH\Test-Commits.ps1" -RepoDir $env:REPO_DIR -Base $env:BASE -Head $env:HEAD_REF

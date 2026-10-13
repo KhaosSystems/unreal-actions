@@ -9,8 +9,11 @@ inputs:
     description: Folder with the zips from the package action.
     default: dist
   tag:
-    description: Release tag, vX.Y.Z.
+    description: Release tag, vX.Y.Z. Created with the release when it does not exist yet.
     default: ${{ github.ref_name }}
+  target:
+    description: The commit to tag when the tag does not exist yet.
+    default: ${{ github.sha }}
   repository:
     description: owner/repo to release in.
     default: ${{ github.repository }}
@@ -33,6 +36,7 @@ runs:
         PLUGIN_DIR: ${{ inputs.plugin-dir }}
         PACKAGES_DIR: ${{ inputs.packages-dir }}
         TAG: ${{ inputs.tag }}
+        TARGET: ${{ inputs.target }}
         REPOSITORY: ${{ inputs.repository }}
       run: |
-        & "$env:GITHUB_ACTION_PATH\Publish-Release.ps1" -PluginDir $env:PLUGIN_DIR -PackageDir $env:PACKAGES_DIR -Tag $env:TAG -Repository $env:REPOSITORY
+        & "$env:GITHUB_ACTION_PATH\Publish-Release.ps1" -PluginDir $env:PLUGIN_DIR -PackageDir $env:PACKAGES_DIR -Tag $env:TAG -Repository $env:REPOSITORY -Target $env:TARGET

@@ -12,18 +12,23 @@ Release assets are only downloadable without signing in when the repository is p
 private repository the release is still made, for the team, and the summary says the zips need
 hosting elsewhere before Fab can fetch them.
 
-Re-running a release replaces the zips on the existing release rather than failing.
+The tag is created with the release when it does not exist yet, as for a version worked out from
+the commit messages; give the commit with -Target. Re-running a release replaces the zips on the
+existing release rather than failing.
 
 .EXAMPLE
 ./Publish-Release.ps1 -PluginDir ./plugin -PackageDir ./dist -Tag v1.2.0 -Repository my-org/MyPlugin
 #>
 [CmdletBinding()]
 param(
-	# The plugin checkout, with history, for the release notes.
+	# The plugin checkout, with history, at the commit being released.
 	[Parameter(Mandatory)][string]$PluginDir,
 	[Parameter(Mandatory)][string]$PackageDir,
 	[Parameter(Mandatory)][string]$Tag,
-	[Parameter(Mandatory)][string]$Repository
+	[Parameter(Mandatory)][string]$Repository,
+
+	# The commit to tag, when the tag does not exist yet.
+	[string]$Target
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,7 +39,11 @@ $Release = ConvertFrom-ReleaseVersion $Tag
 $Zips = @(Get-ChildItem -LiteralPath $PackageDir -Filter '*.zip' | Sort-Object Name)
 if ($Zips.Count -eq 0) { throw "No zips in $PackageDir." }
 
-$VersionNotes = Get-ReleaseNotes -RepoDir $PluginDir -Tag $Tag
+$TagExists = (Invoke-NativeQuiet gh @('api', "repos/$Repository/git/ref/tags/$Tag")).ExitCode -eq 0
+if (-not $TagExists -and -not $Target) { throw "Tag $Tag does not exist; give the commit to release with -Target." }
+
+# The checkout is at the commit being released, tagged or not yet.
+$VersionNotes = Get-ReleaseNotes -RepoDir $PluginDir -Ref 'HEAD'
 
 $Checksums = @('| Package | SHA-256 |', '| --- | --- |')
 foreach ($Zip in $Zips)
@@ -67,7 +76,8 @@ if ((Invoke-NativeQuiet gh @('release', 'view', $Tag, '--repo', $Repository)).Ex
 }
 else
 {
-	$Arguments = @('release', 'create', $Tag) + $Assets + @('--repo', $Repository, '--verify-tag', '--title', "$($Descriptor.Name) $($Release.VersionName)", '--notes-file', $NotesFile)
+	$Arguments = @('release', 'create', $Tag) + $Assets + @('--repo', $Repository, '--title', "$($Descriptor.Name) $($Release.VersionName)", '--notes-file', $NotesFile)
+	if ($TagExists) { $Arguments += '--verify-tag' } else { $Arguments += @('--target', $Target) }
 	if ($Release.VersionName.Contains('-')) { $Arguments += '--prerelease' }
 	& gh @Arguments
 	if ($LASTEXITCODE -ne 0) { throw "Creating release $Tag failed." }

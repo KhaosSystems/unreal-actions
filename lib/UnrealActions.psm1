@@ -180,6 +180,9 @@ function Invoke-NativeQuiet
 		[string[]]$ArgumentList = @()
 	)
 
+	# git writes UTF-8; read as the console's code page, names like Sondergaard with an o-slash break.
+	try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
+
 	# See Invoke-NativeCommand: redirecting stderr under 'Stop' would throw on its first line.
 	$PreviousPreference = $ErrorActionPreference
 	$ErrorActionPreference = 'Continue'
@@ -1143,56 +1146,225 @@ function Get-PluginBadges
 
 #endregion
 
-#region Releases
+#region Conventional commits, versions and release notes
+
+# The commit types accepted; see https://www.conventionalcommits.org.
+$script:CommitTypes = @('feat', 'fix', 'perf', 'refactor', 'docs', 'test', 'ci', 'build', 'chore', 'style', 'revert')
+# Housekeeping that changes nothing for someone using the project: left out of release notes.
+$script:QuietCommitTypes = @('ci', 'chore', 'test', 'build', 'style')
 
 <#
 .SYNOPSIS
-Release notes from the conventional commit subjects since the previous vX.Y.Z tag.
+Parse a commit message as a conventional commit: "type(scope)!: description".
+.OUTPUTS
+Type (lowercase), Scope, Breaking and Description; nothing if the message is not one.
+#>
+function ConvertFrom-ConventionalCommit
+{
+	param([Parameter(Mandatory)][AllowEmptyString()][string]$Message)
+
+	$Lines = $Message.Replace("`r", '').Split("`n")
+	$Match = [regex]::Match($Lines[0].Trim(), '^(?<type>[A-Za-z]+)(\((?<scope>[^()]+)\))?(?<bang>!)?: (?<text>\S.*)$')
+	if (-not $Match.Success) { return $null }
+
+	# The footer token is case sensitive in the specification.
+	$Body = ($Lines | Select-Object -Skip 1) -join "`n"
+	$Breaking = $Match.Groups['bang'].Success -or [regex]::IsMatch($Body, '(?m)^BREAKING[ -]CHANGE: ')
+
+	return [pscustomobject]@{
+		Type = $Match.Groups['type'].Value.ToLowerInvariant()
+		Scope = $Match.Groups['scope'].Value
+		Breaking = [bool]$Breaking
+		Description = $Match.Groups['text'].Value.Trim()
+	}
+}
+
+<#
+.SYNOPSIS
+The commits in a range, oldest first and without merge commits, as Hash, Subject and Message.
+#>
+function Get-Commits
+{
+	param(
+		[Parameter(Mandatory)][string]$RepoDir,
+		[Parameter(Mandatory)][string]$Range
+	)
+
+	# Unit and record separators keep multi-line messages apart.
+	$Result = Invoke-NativeQuiet git @('-C', $RepoDir, 'log', '--no-merges', '--reverse', '--format=%h%x1f%B%x1e', $Range)
+	if ($Result.ExitCode -ne 0) { throw "git log $Range failed in $RepoDir." }
+
+	$Commits = @()
+	foreach ($Record in ($Result.Output -join "`n").Split([char]0x1e))
+	{
+		$Record = $Record.Trim()
+		if (-not $Record) { continue }
+		$Parts = $Record.Split([char]0x1f)
+		$Message = ($Parts[1..($Parts.Count - 1)] -join '').Trim()
+		$Commits += [pscustomobject]@{
+			Hash = $Parts[0].Trim()
+			Subject = $Message.Replace("`r", '').Split("`n")[0]
+			Message = $Message
+		}
+	}
+	return ,$Commits
+}
+
+<#
+.SYNOPSIS
+The most recent vX.Y.Z tag reachable from a commit, prereleases left out. Nothing if none.
+#>
+function Get-PreviousReleaseTag
+{
+	param(
+		[Parameter(Mandatory)][string]$RepoDir,
+		[Parameter(Mandatory)][string]$Ref
+	)
+
+	$Result = Invoke-NativeQuiet git @('-C', $RepoDir, 'describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*.[0-9]*.[0-9]*', '--exclude', '*-*', $Ref)
+	if ($Result.ExitCode -ne 0) { return $null }
+	return ($Result.Output | Select-Object -First 1)
+}
+
+<#
+.SYNOPSIS
+The next release version from the conventional commits since the last vX.Y.Z tag.
 
 .DESCRIPTION
-feat and fix commits get their own sections. ci, chore, test, build and style commits are left
-out, since they change nothing for someone using the plugin. Anything else, including subjects
-not in conventional form, is listed under Other changes.
+feat bumps the minor version; fix, perf and revert the patch; a breaking change (an exclamation
+mark before the colon, or a BREAKING CHANGE footer) the major, or the minor while the version is
+still 0.x, as semver allows during initial development. Commits of any other type, or not
+conventional at all, make no release on their own.
+
+.OUTPUTS
+Previous (the last tag, or nothing), Version (without the v; empty when there is nothing to
+release), Bump (major, minor, patch or none) and Commits.
+#>
+function Get-NextVersion
+{
+	param(
+		[Parameter(Mandatory)][string]$RepoDir,
+		[string]$Ref = 'HEAD'
+	)
+
+	$Previous = Get-PreviousReleaseTag $RepoDir $Ref
+	$Range = $Ref
+	if ($Previous) { $Range = "$Previous..$Ref" }
+	$Commits = Get-Commits $RepoDir $Range
+
+	$Rank = 0
+	foreach ($Commit in $Commits)
+	{
+		$Parsed = ConvertFrom-ConventionalCommit $Commit.Message
+		if (-not $Parsed) { continue }
+		$Level = 0
+		if ($Parsed.Breaking) { $Level = 3 }
+		elseif ($Parsed.Type -eq 'feat') { $Level = 2 }
+		elseif (@('fix', 'perf', 'revert') -contains $Parsed.Type) { $Level = 1 }
+		$Rank = [math]::Max($Rank, $Level)
+	}
+
+	$Major = 0; $Minor = 0; $Patch = 0
+	if ($Previous)
+	{
+		$Match = [regex]::Match($Previous, '^v(\d+)\.(\d+)\.(\d+)')
+		$Major = [int]$Match.Groups[1].Value; $Minor = [int]$Match.Groups[2].Value; $Patch = [int]$Match.Groups[3].Value
+	}
+	if ($Rank -eq 3 -and $Major -eq 0) { $Rank = 2 }
+
+	switch ($Rank)
+	{
+		3 { $Major++; $Minor = 0; $Patch = 0 }
+		2 { $Minor++; $Patch = 0 }
+		1 { $Patch++ }
+	}
+
+	$Version = ''
+	if ($Rank -gt 0) { $Version = "$Major.$Minor.$Patch" }
+	return [pscustomobject]@{
+		Previous = $Previous
+		Version = $Version
+		Bump = @('none', 'patch', 'minor', 'major')[$Rank]
+		Commits = $Commits
+	}
+}
+
+<#
+.SYNOPSIS
+Report every commit in a range whose message is not a conventional commit of a known type.
+.OUTPUTS
+How many were reported.
+#>
+function Test-ConventionalCommits
+{
+	param(
+		[Parameter(Mandatory)][string]$RepoDir,
+		[Parameter(Mandatory)][string]$Range
+	)
+
+	$Bad = 0
+	foreach ($Commit in (Get-Commits $RepoDir $Range))
+	{
+		# What git revert writes is accepted as it is.
+		if ($Commit.Subject.StartsWith('Revert "')) { continue }
+
+		$Parsed = ConvertFrom-ConventionalCommit $Commit.Message
+		if (-not $Parsed)
+		{
+			$Problem = 'is not in the form "type: description" or "type(scope): description"'
+		}
+		elseif ($script:CommitTypes -notcontains $Parsed.Type)
+		{
+			$Problem = "has type '$($Parsed.Type)', which is not one of $($script:CommitTypes -join ', ')"
+		}
+		else
+		{
+			Write-Host "  ok  $($Commit.Hash) $($Commit.Subject)"
+			continue
+		}
+
+		$Bad++
+		Write-CiAnnotation error "Commit $($Commit.Hash) '$($Commit.Subject)' $Problem. Versions and release notes are worked out from commit messages; reword it, for example 'fix: crash when saving' or 'feat(ui): outline panel'." -Title 'Commit message'
+	}
+	return $Bad
+}
+
+<#
+.SYNOPSIS
+Release notes for a commit: the conventional commits since the release tag before it.
+
+.DESCRIPTION
+Breaking changes, features and fixes get their own sections. ci, chore, test, build and style
+commits are left out, since they change nothing for someone using the project. Anything else,
+including messages not in conventional form, is listed under Other changes.
 #>
 function Get-ReleaseNotes
 {
 	param(
 		[Parameter(Mandatory)][string]$RepoDir,
-		[Parameter(Mandatory)][string]$Tag
+		# The commit being released, or its tag.
+		[Parameter(Mandatory)][Alias('Tag')][string]$Ref
 	)
 
-	function Invoke-Git([string[]]$Arguments)
-	{
-		$Result = Invoke-NativeQuiet git (@('-C', $RepoDir) + $Arguments)
-		if ($Result.ExitCode -ne 0) { return $null }
-		return $Result.Output
-	}
+	$Previous = Get-PreviousReleaseTag $RepoDir "$Ref^"
+	$Range = $Ref
+	if ($Previous) { $Range = "$Previous..$Ref" }
 
-	$Previous = Invoke-Git @('describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*', "$Tag^")
-	$Range = $Tag
-	if ($Previous) { $Range = "$Previous..$Tag" }
-
-	$Sections = [ordered]@{ 'Features' = @(); 'Fixes' = @(); 'Other changes' = @() }
-	foreach ($Line in @(Invoke-Git @('log', '--no-merges', '--format=%h %s', $Range)))
+	$Sections = [ordered]@{ 'Breaking changes' = @(); 'Features' = @(); 'Fixes' = @(); 'Other changes' = @() }
+	foreach ($Commit in (Get-Commits $RepoDir $Range))
 	{
-		if (-not $Line) { continue }
-		$Hash, $Subject = $Line.Split(' ', 2)
-		$Match = [regex]::Match($Subject, '^(?<type>\w+)(\([^)]*\))?!?:\s*(?<text>.+)$')
-		if (-not $Match.Success)
+		$Parsed = ConvertFrom-ConventionalCommit $Commit.Message
+		if (-not $Parsed)
 		{
-			$Sections['Other changes'] += "- $Subject ($Hash)"
+			$Sections['Other changes'] += "- $($Commit.Subject) ($($Commit.Hash))"
 			continue
 		}
 
-		$Text = $Match.Groups['text'].Value
-		switch ($Match.Groups['type'].Value.ToLowerInvariant())
-		{
-			'feat' { $Sections['Features'] += "- $Text ($Hash)" }
-			'fix' { $Sections['Fixes'] += "- $Text ($Hash)" }
-			# Housekeeping that changes nothing for someone using the plugin.
-			{ @('ci', 'chore', 'test', 'build', 'style') -contains $_ } { }
-			default { $Sections['Other changes'] += "- $Text ($Hash)" }
-		}
+		$Entry = "- $($Parsed.Description) ($($Commit.Hash))"
+		if ($Parsed.Breaking) { $Sections['Breaking changes'] += $Entry }
+		elseif ($Parsed.Type -eq 'feat') { $Sections['Features'] += $Entry }
+		elseif (@('fix', 'perf') -contains $Parsed.Type) { $Sections['Fixes'] += $Entry }
+		elseif ($script:QuietCommitTypes -notcontains $Parsed.Type) { $Sections['Other changes'] += $Entry }
 	}
 
 	$Notes = @()
