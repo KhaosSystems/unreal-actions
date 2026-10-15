@@ -215,6 +215,11 @@ try
 	Check 'replaces and inserts fields' ($Json.VersionName -eq '1.2.3' -and $Json.Version -eq 1002003 -and $Json.EngineVersion -eq '5.8.0')
 	Check 'keeps tabs and CRLF' ($Stamped.Contains("`r`n`t`"EngineVersion`": `"5.8.0`",`r`n") -and $Stamped.Contains("`t`"VersionName`": `"1.2.3`""))
 	Check 'leaves the rest alone' ($Stamped.Contains('"Plugins": [ { "Name": "X", "Enabled": true } ]'))
+	$Unstamped = Remove-DescriptorField $Stamped 'EngineVersion'
+	Check 'removes a field and nothing else' ($Unstamped -eq (Set-DescriptorField (Set-DescriptorField $Text 'VersionName' '1.2.3') 'Version' 1002003))
+	$Last = "{`n`t`"FileVersion`": 3,`n`t`"EngineVersion`": `"5.8.0`"`n}`n"
+	Check 'removes a last field with the comma before it' ((Remove-DescriptorField $Last 'EngineVersion') -eq "{`n`t`"FileVersion`": 3`n}`n")
+	Check 'leaves a descriptor without the field as it is' ((Remove-DescriptorField $Text 'EngineVersion') -eq $Text)
 
 	Write-Host 'Release versions'
 	$Release = ConvertFrom-ReleaseVersion 'v1.2.3'

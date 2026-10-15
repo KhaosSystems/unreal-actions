@@ -526,6 +526,32 @@ function Set-DescriptorField
 
 <#
 .SYNOPSIS
+Remove one top-level scalar field from .uplugin text, keeping the author's formatting.
+#>
+function Remove-DescriptorField
+{
+	param(
+		[Parameter(Mandatory)][string]$Text,
+		[Parameter(Mandatory)][string]$Name
+	)
+
+	$Field = '"' + [regex]::Escape($Name) + '"[ \t]*:[ \t]*(?:"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|true|false|null)'
+	$Result = [regex]::Replace($Text, '(?m)^[ \t]*' + $Field + '[ \t]*,[ \t]*\r?\n', '')
+	if ($Result -eq $Text)
+	{
+		# The last member has no comma after it, so the one before it goes instead.
+		$Result = [regex]::Replace($Text, ',(?<eol>[ \t]*\r?\n)[ \t]*' + $Field + '[ \t]*(?=\r?\n)', '')
+	}
+
+	if ($null -ne (Get-JsonValue ($Result | ConvertFrom-Json) $Name))
+	{
+		throw "Removing $Name from the descriptor did not take. Is it written across several lines?"
+	}
+	return $Result
+}
+
+<#
+.SYNOPSIS
 Parse a release version such as 1.2.3 or 1.2.3-rc.1.
 .OUTPUTS
 VersionName (the full string) and Version, the integer Unreal compares to order releases.

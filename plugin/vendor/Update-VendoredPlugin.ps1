@@ -83,6 +83,9 @@ $Unpacked = Join-Paths $WorkDir 'package'
 Expand-PluginZip -ZipPath $Zip.File.FullName -Destination $Unpacked
 $PluginDir = @(Get-ChildItem -LiteralPath $Unpacked -Directory)[0].FullName
 $Descriptor = Get-PluginDescriptor $PluginDir
+# Each zip is stamped with the engine it was built for, and an older engine refuses a plugin stamped
+# with a newer one. The game compiles the copy with its own engine, so the stamp goes.
+Write-Utf8File $Descriptor.Path (Remove-DescriptorField $Descriptor.Raw 'EngineVersion')
 $Version = Get-JsonValue $Descriptor.Json 'VersionName' $Tag
 if (-not $Path) { $Path = "Plugins/$($Descriptor.Name)" }
 $Path = $Path.Replace('\', '/').Trim('/')
