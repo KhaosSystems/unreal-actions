@@ -62,7 +62,7 @@ the Fab publisher portal. Pushing a `vX.Y.Z` tag yourself still works too.
 | [`plugin/test`](plugin/test/action.yml) | The plugin's automation tests in a headless editor. |
 | [`plugin/release`](plugin/release/action.yml) | GitHub release, the `release` branch games follow, and the Fab checklist. |
 | [`plugin/badges`](plugin/badges/action.yml) | Tests, engine versions and lines of code, for the README. Public repositories only. |
-
+| [`plugin/vendor`](plugin/vendor/action.yml) | A pull request that updates the copy of the plugin another repository keeps. |
 | [`commits/check`](commits/check/action.yml) | Fails when a commit message is not a conventional commit. |
 | [`commits/next-version`](commits/next-version/action.yml) | The next semver version from the commits since the last release. |
 
@@ -100,6 +100,20 @@ updates:
     allow:
       - dependency-name: Plugins/MyStudio* # your plugins; third-party submodules stay put
 ```
+
+A private plugin cannot be a submodule of a game whose builds and people cannot all read it. The
+game keeps a copy in `Plugins/PLUGIN` instead, and each stable release opens a pull request there
+that replaces the copy with the release's source package. In the plugin's ci.yml:
+
+```yaml
+    with:
+      vendor-to: '["OWNER/GAME"]'
+    secrets:
+      vendor-token: ${{ secrets.VENDOR_TOKEN }}
+```
+
+`VENDOR_TOKEN` is a fine-grained token for the game's owner with *Contents* and *Pull requests*
+read and write on the game repositories.
 
 ## Build machine
 
