@@ -250,11 +250,13 @@ try
 		'C:\Program Files\Epic Games\UE_5.8\Engine\Source\Runtime\Core\Public\X.h(19,3): warning C4100: engine noise'
 		'C:\Program Files\Epic Games\UE_5.8\Engine\Source\Runtime\Core\Public\X.h(19,3): error C2027: use of undefined type ''UThing'''
 		'C:\b\out\Sample\HostProject\Plugins\Sample\Source\SampleEditor\Private\C.h(16,7): note: see declaration of ''UThing'''
+		'C:\b\out\Sample\HostProject\Plugins\Sample\Source\SampleEditor\Public\D.h(67): Error: An explicit Category specifier is required'
 		'[3/8] Compile [x64] A.cpp'
 	)
 	$Report = New-CompileDiagnosticReporter -PluginName 'Sample' -Label 'UE 5.8'
 	$Annotations = Get-Annotations { foreach ($Line in $Log) { & $Report $Line } }
-	Check 'reports each plugin diagnostic once' ($Annotations.Count -eq 3) ($Annotations -join "`n")
+	Check 'reports each plugin diagnostic once' ($Annotations.Count -eq 4) ($Annotations -join "`n")
+	Check 'reports UnrealHeaderTool errors' (@($Annotations | Where-Object { $_ -like '::error file=Source/SampleEditor/Public/D.h,line=67,title=UE 5.8 error::*Category*' }).Count -eq 1) ($Annotations -join "`n")
 	Check 'maps errors to the repository path' (@($Annotations | Where-Object { $_ -like '::error file=Source/SampleEditor/Private/A.cpp,line=12,*' }).Count -eq 1)
 	Check 'keeps warnings as warnings' (@($Annotations | Where-Object { $_ -like '::warning file=Source/SampleEditor/Private/B.cpp,line=3,*' }).Count -eq 1)
 	Check 'pins engine-header errors on the plugin line that caused them' (@($Annotations | Where-Object { $_ -like '::error file=Source/SampleEditor/Private/C.h,line=16,*undefined type*' }).Count -eq 1)

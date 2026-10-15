@@ -812,7 +812,8 @@ function New-CompileDiagnosticReporter
 	)
 
 	$PluginPath = [regex]('(?i)[\\/]Plugins[\\/]' + [regex]::Escape($PluginName) + '[\\/](?<path>.+)$')
-	$Pattern = [regex]'^\s*(?<file>[A-Za-z]:[\\/][^(]+?)\((?<line>\d+)(?:,\d+)?\)\s*:\s*(?<level>fatal error|error|warning|note)(?:\s+(?<code>[A-Z]+\d+))?\s*:\s*(?<message>.+)$'
+	# The compiler writes 'error', UnrealHeaderTool 'Error'.
+	$Pattern = [regex]'^\s*(?<file>[A-Za-z]:[\\/][^(]+?)\((?<line>\d+)(?:,\d+)?\)\s*:\s*(?<level>(?i:fatal error|error|warning|note))(?:\s+(?<code>[A-Z]+\d+))?\s*:\s*(?<message>.+)$'
 	$State = @{ Pending = $null; Reported = @{} }
 
 	return {
@@ -820,7 +821,7 @@ function New-CompileDiagnosticReporter
 		$Match = $Pattern.Match($Line)
 		if (-not $Match.Success) { return }
 
-		$Level = $Match.Groups['level'].Value
+		$Level = $Match.Groups['level'].Value.ToLowerInvariant()
 		$PathMatch = $PluginPath.Match($Match.Groups['file'].Value)
 		if ($Level -eq 'note')
 		{
@@ -846,7 +847,7 @@ function New-CompileDiagnosticReporter
 		if ($State.Reported.ContainsKey($Key)) { return }
 		$State.Reported[$Key] = $true
 
-		$DiagnosticLevel = $Diagnostic.Groups['level'].Value
+		$DiagnosticLevel = $Diagnostic.Groups['level'].Value.ToLowerInvariant()
 		$Severity = 'error'
 		if ($DiagnosticLevel -eq 'warning') { $Severity = 'warning' }
 		$Title = "$Label $DiagnosticLevel"
