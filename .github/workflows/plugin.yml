@@ -234,7 +234,7 @@ jobs:
           target: ${{ github.sha }}
 
   vendor:
-    name: Update copy in ${{ matrix.repository }}
+    name: Update copies
     needs: [package, release]
     if: inputs.vendor-to != '[]' && !contains(needs.package.outputs.tag, '-')
     runs-on: windows-latest
