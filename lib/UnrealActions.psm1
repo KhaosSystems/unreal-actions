@@ -596,6 +596,47 @@ $script:DefaultRules = @(
 	'-/Tests/...'
 )
 
+# What BuildPlugin itself copies into the plugin it builds, before FilterPlugin.ini adds to it
+# (FilterPluginFiles in BuildPluginCommand.Automation.cs). Epic builds the plugin Fab buyers download
+# this way, so whatever this leaves out, they do not get: notably Config.
+$script:BuildPluginRules = @(
+	'/Binaries/ThirdParty/...'
+	'/Resources/...'
+	'/Content/...'
+	'/Intermediate/Build/.../Inc/...'
+	'/Shaders/...'
+	'/Source/...'
+	'-/Tests/...'
+)
+
+<# Compile FileFilter rules, '-' marking an exclusion, for Test-FilterRules. #>
+function New-FilterRules([string[]]$Patterns)
+{
+	$Rules = @()
+	foreach ($Rule in $Patterns)
+	{
+		$Exclude = $Rule.StartsWith('-')
+		$Pattern = $Rule
+		if ($Exclude) { $Pattern = $Rule.Substring(1).Trim() }
+		$Rules += [pscustomobject]@{
+			Regex = New-Object regex((ConvertTo-FilterRegex $Pattern), 'IgnoreCase, CultureInvariant')
+			Exclude = $Exclude
+		}
+	}
+	return ,$Rules
+}
+
+<# Whether rules from New-FilterRules include a '/'-separated relative path: the last match decides. #>
+function Test-FilterRules($Rules, [string]$Relative)
+{
+	$Included = $false
+	foreach ($Rule in $Rules)
+	{
+		if ($Rule.Regex.IsMatch($Relative)) { $Included = -not $Rule.Exclude }
+	}
+	return $Included
+}
+
 # Never shipped, wherever they appear and whatever FilterPlugin.ini says. Fab declines code plugins
 # that contain build output, so this is not left to the filter.
 $script:ExcludedFolders = @('Binaries', 'Intermediate', 'Saved', 'DerivedDataCache', '.vs', '.vscode', '.idea', '.git', '.github', '__pycache__')
@@ -695,17 +736,7 @@ function Get-PluginPackageFiles
 {
 	param([Parameter(Mandatory)]$Descriptor)
 
-	$Rules = @()
-	foreach ($Rule in ($script:DefaultRules + (Get-FilterPluginRules $Descriptor.Dir)))
-	{
-		$Exclude = $Rule.StartsWith('-')
-		$Pattern = $Rule
-		if ($Exclude) { $Pattern = $Rule.Substring(1).Trim() }
-		$Rules += [pscustomobject]@{
-			Regex = New-Object regex((ConvertTo-FilterRegex $Pattern), 'IgnoreCase, CultureInvariant')
-			Exclude = $Exclude
-		}
-	}
+	$Rules = New-FilterRules ($script:DefaultRules + (Get-FilterPluginRules $Descriptor.Dir))
 
 	$Files = New-Object System.Collections.Generic.List[string]
 	$Files.Add($Descriptor.FileName)
@@ -727,12 +758,7 @@ function Get-PluginPackageFiles
 			$Relative = $File.Substring($Descriptor.Dir.Length + 1).Replace('\', '/')
 			if ($Relative -eq $Descriptor.FileName) { continue }
 
-			$Included = $false
-			foreach ($Rule in $Rules)
-			{
-				if ($Rule.Regex.IsMatch($Relative)) { $Included = -not $Rule.Exclude }
-			}
-			if ($Included) { $Files.Add($Relative) }
+			if (Test-FilterRules $Rules $Relative) { $Files.Add($Relative) }
 		}
 	}
 
@@ -979,6 +1005,15 @@ function Test-PluginPackage
 			$Hint = ''
 			if ($Folder -eq 'Config') { $Hint = ' Add Config/FilterPlugin.ini; it also controls which extra files ship.' }
 			& $Fail "Fab requires a $Folder/ folder in a code plugin, and this package has none.$Hint"
+		}
+	}
+
+	$Shipped = New-FilterRules ($script:BuildPluginRules + (Get-FilterPluginRules $Descriptor.Dir))
+	foreach ($File in ($Files | Where-Object { $_.StartsWith('Config/') -and $_ -ne 'Config/FilterPlugin.ini' }))
+	{
+		if (-not (Test-FilterRules $Shipped $File))
+		{
+			& $Fail "Fab buyers would not get $($File): BuildPlugin, which Epic builds the plugin with, copies Config files only when Config/FilterPlugin.ini lists them. Add /$File (or /Config/...) under [FilterPlugin]." $File
 		}
 	}
 

@@ -187,6 +187,11 @@ try
 			Expect = 'Config/ folder'
 		}
 		@{
+			Name = 'config file that BuildPlugin leaves out'
+			Break = { New-TestFile "$Plugin\Config\DefaultSample.ini" "[/Script/Sample.Settings]`n" }
+			Expect = 'file=Config/DefaultSample.ini'
+		}
+		@{
 			Name = 'module with no Build.cs'
 			Break = { Remove-Item "$Plugin\Source\SampleEditor\SampleEditor.Build.cs" }
 			Expect = 'no SampleEditor.Build.cs'
@@ -200,6 +205,12 @@ try
 		$Hit = @($Outcome.Errors | Where-Object { $_.Contains($Breakage.Expect) })
 		Check "reports $($Breakage.Name)" ($Hit.Count -gt 0 -and $Outcome.Result.Errors -gt 0) ($Outcome.Annotations -join "`n")
 	}
+
+	New-FixturePlugin $Plugin
+	New-TestFile "$Plugin\Config\DefaultSample.ini" "[/Script/Sample.Settings]`n"
+	Add-Content "$Plugin\Config\FilterPlugin.ini" '/Config/DefaultSample.ini'
+	$Outcome = Test-Fixture $Plugin
+	Check 'a config file listed in FilterPlugin.ini is fine' ($Outcome.Errors.Count -eq 0) ($Outcome.Annotations -join "`n")
 
 	New-FixturePlugin $Plugin
 	Remove-Item "$Plugin\Resources\Icon128.png"
