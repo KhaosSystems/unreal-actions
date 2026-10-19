@@ -7,9 +7,6 @@
 #   release  Once every engine passed, for a run with release set (the next version comes from the
 #            commit messages) or a pushed vX.Y.Z tag: GitHub release and tag, release branch, Fab
 #            checklist.
-#   vendor   After a stable release, for each repository in vendor-to: a pull request that updates
-#            the copy of the plugin it keeps. For private plugins, which games cannot use as
-#            submodules.
 #   badges   On the default branch of a public repository: tests, engines and lines of code.
 #   notify   Optional Discord message for releases and failures.
 #
@@ -45,7 +42,7 @@ on:
         type: boolean
         default: false
       vendor-to:
-        description: JSON array of repositories, owner/name, that keep a copy of the plugin in Plugins/<name>. Each gets a pull request per stable release. Needs the vendor-token secret.
+        description: Deprecated and ignored. Games now pull private plugin releases themselves with game/update-plugin.
         type: string
         default: '[]'
     secrets:
@@ -53,7 +50,7 @@ on:
         description: Discord webhook for release and failure notices. Optional.
         required: false
       vendor-token:
-        description: Token that can push branches and open pull requests in the vendor-to repositories.
+        description: Deprecated and ignored, with vendor-to.
         required: false
 
 jobs:
@@ -122,6 +119,11 @@ jobs:
           $Release = [bool]$Tag
           "release=$($Release.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
           "tag=$Tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+
+      - name: Deprecated inputs
+        if: inputs.vendor-to != '[]'
+        shell: powershell
+        run: Write-Host '::warning title=vendor-to is deprecated::Plugin releases no longer push to games. Remove vendor-to and vendor-token from ci.yml; games pull releases with KhaosSystems/unreal-actions/game/update-plugin.'
 
       - id: package
         uses: KhaosSystems/unreal-actions/plugin/package@v1
@@ -232,29 +234,6 @@ jobs:
           packages-dir: dist
           tag: ${{ needs.package.outputs.tag }}
           target: ${{ github.sha }}
-
-  vendor:
-    name: Update copies
-    needs: [package, release]
-    if: inputs.vendor-to != '[]' && !contains(needs.package.outputs.tag, '-')
-    runs-on: windows-latest
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        repository: ${{ fromJSON(inputs.vendor-to) }}
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: source-packages
-          path: dist
-
-      - uses: KhaosSystems/unreal-actions/plugin/vendor@v1
-        with:
-          repository: ${{ matrix.repository }}
-          token: ${{ secrets.vendor-token }}
-          tag: ${{ needs.package.outputs.tag }}
 
   badges:
     name: Badges

@@ -4,7 +4,8 @@ GitHub Actions for Unreal Engine projects, grouped by what they work on.
 
 `plugin/` covers code plugins sold on Fab: it checks a plugin against Fab's requirements, builds
 its source zip the way Epic does, runs its tests, releases it, and keeps its README badges current.
-`commits/` checks commit messages and works out version numbers from them.
+`commits/` checks commit messages and works out version numbers from them. `game/` runs in a game
+repository: it brings in private plugins' releases.
 
 ## Plugins
 
@@ -62,9 +63,9 @@ the Fab publisher portal. Pushing a `vX.Y.Z` tag yourself still works too.
 | [`plugin/test`](plugin/test/action.yml) | The plugin's automation tests in a headless editor. |
 | [`plugin/release`](plugin/release/action.yml) | GitHub release, the `release` branch games follow, and the Fab checklist. |
 | [`plugin/badges`](plugin/badges/action.yml) | Tests, engine versions and lines of code, for the README. Public repositories only. |
-| [`plugin/vendor`](plugin/vendor/action.yml) | A pull request that updates the copy of the plugin another repository keeps. |
 | [`commits/check`](commits/check/action.yml) | Fails when a commit message is not a conventional commit. |
 | [`commits/next-version`](commits/next-version/action.yml) | The next semver version from the commits since the last release. |
+| [`game/update-plugin`](game/update-plugin/action.yml) | In a game: a pull request that updates its copy of a private plugin to the latest release. |
 
 [`plugin.yml`](.github/workflows/plugin.yml) chains them; they can also be used one by one, as
 `KhaosSystems/unreal-actions/<group>/<action>@v1`.
@@ -102,18 +103,39 @@ updates:
 ```
 
 A private plugin cannot be a submodule of a game whose builds and people cannot all read it. The
-game keeps a copy in `Plugins/PLUGIN` instead, and each stable release opens a pull request there
-that replaces the copy with the release's source package. In the plugin's ci.yml:
+game keeps a copy in `Plugins/PLUGIN` instead and pulls each stable release as a pull request that
+replaces the copy with the release's source package, in `.github/workflows/plugins.yml`:
 
 ```yaml
-    with:
-      vendor-to: '["OWNER/GAME"]'
-    secrets:
-      vendor-token: ${{ secrets.VENDOR_TOKEN }}
+name: Plugin updates
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: [OWNER/PLUGIN]
+    steps:
+      - uses: KhaosSystems/unreal-actions/game/update-plugin@v1
+        with:
+          plugin: ${{ matrix.plugin }}
+          token: ${{ secrets.PLUGINS_TOKEN }}
 ```
 
-`VENDOR_TOKEN` is a fine-grained token for the game's owner with *Contents* and *Pull requests*
-read and write on the game repositories.
+`PLUGINS_TOKEN` is a fine-grained token for the plugins' owner with read-only *Contents* on the
+plugin repositories. The game's own token opens the pull requests, so its repository must allow
+GitHub Actions to create pull requests (Settings > Actions > General). The plugin repositories
+know nothing of the games that use them.
 
 ## Build machine
 
