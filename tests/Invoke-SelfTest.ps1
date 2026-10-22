@@ -277,6 +277,48 @@ try
 	Check 'keeps warnings as warnings' (@($Annotations | Where-Object { $_ -like '::warning file=Source/SampleEditor/Private/B.cpp,line=3,*' }).Count -eq 1)
 	Check 'pins engine-header errors on the plugin line that caused them' (@($Annotations | Where-Object { $_ -like '::error file=Source/SampleEditor/Private/C.h,line=16,*undefined type*' }).Count -eq 1)
 
+	Write-Host 'Content versions'
+	# A package summary as UE 5.6+ writes it: tag, legacy -9, UE3, UE4, UE5 1018, licensee, saved hash
+	# and header size, then the custom versions: FortniteMain 268 and one the engine does not list.
+	$Package = New-Object IO.MemoryStream
+	$Writer = New-Object IO.BinaryWriter($Package)
+	foreach ($Value in @(-1641380927, -9, 864, 522, 1018, 0)) { $Writer.Write([int]$Value) }
+	$Writer.Write((New-Object byte[] 20)); $Writer.Write([int]0)
+	$Writer.Write([int]2)
+	foreach ($Part in @(0x601D1886, 0xAC644F84, 0xAA16D3DE, 0x0DEAC7D6)) { $Writer.Write([int]$Part) } # same bytes as the uint32s
+	$Writer.Write([int]268)
+	foreach ($Part in @(1, 2, 3, 4)) { $Writer.Write([int]$Part) }
+	$Writer.Write([int]5)
+	$Writer.Write((New-Object byte[] 64))
+	$ContentPlugin = Join-Paths $Temp 'ContentPlugin'
+	New-Item -ItemType Directory -Path "$ContentPlugin\Content\Maps" -Force | Out-Null
+	[IO.File]::WriteAllBytes("$ContentPlugin\Content\Maps\L_Demo.umap", $Package.ToArray())
+	New-TestFile "$ContentPlugin\Content\Docs\Readme.md" "# not a package`n"
+
+	$Saved = @(Get-UnrealPackageCustomVersions "$ContentPlugin\Content\Maps\L_Demo.umap")
+	Check 'reads the custom versions a package was saved with' ($Saved.Count -eq 2 -and $Saved[0].Key -eq '601D1886-AC644F84-AA16D3DE-0DEAC7D6' -and $Saved[0].Version -eq 268) ($Saved | Out-String)
+	Check 'a file that is not a package has none' (@(Get-UnrealPackageCustomVersions "$ContentPlugin\Content\Docs\Readme.md").Count -eq 0)
+
+	function New-FakeEngineSource([string]$Root, [int]$Latest)
+	{
+		New-TestFile "$Root\Engine\Source\Runtime\Core\Private\UObject\DevObjectVersion.cpp" "const FGuid FFortniteMainBranchObjectVersion::GUID(0x601D1886, 0xAC644F84, 0xAA16D3DE, 0x0DEAC7D6);`n"
+		New-TestFile "$Root\Engine\Source\Runtime\Core\Public\UObject\FortniteMainBranchObjectVersions.inl" "#define FORTNITE_MAIN_VERSION(Version, ID) Version,`nFORTNITE_MAIN_VERSION(BeforeCustomVersionWasAdded, 0)`nFORTNITE_MAIN_VERSION(Latest, $Latest)`n#undef FORTNITE_MAIN_VERSION`n"
+	}
+	New-FakeEngineSource "$Temp\UE_old" 225
+	New-FakeEngineSource "$Temp\UE_new" 268
+	$Limits = Get-EngineCustomVersionLimits "$Temp\UE_old"
+	Check "reads an engine's newest versions from its source" ($Limits['601D1886-AC644F84-AA16D3DE-0DEAC7D6'].Latest -eq 225)
+
+	$script:TooNew = $null
+	$Annotations = Get-Annotations { $script:TooNew = Test-PluginContentVersions -PluginDir $ContentPlugin -EngineRoot "$Temp\UE_old" -EngineVersion '9.7' }
+	Check 'an asset saved by a newer engine is an error on that asset' ($script:TooNew -eq 1 -and @($Annotations | Where-Object { $_ -like '::error file=Content/Maps/L_Demo.umap,*9.7*FortniteMainBranchObjectVersion 268, newest 225*' }).Count -eq 1) ($Annotations -join "`n")
+	$script:TooNew = $null
+	$Annotations = Get-Annotations { $script:TooNew = Test-PluginContentVersions -PluginDir $ContentPlugin -EngineRoot "$Temp\UE_new" -EngineVersion '9.8' }
+	Check 'the engine that saved it is fine' ($script:TooNew -eq 0 -and $Annotations.Count -eq 0) ($Annotations -join "`n")
+	$script:TooNew = $null
+	$Annotations = Get-Annotations { $script:TooNew = Test-PluginContentVersions -PluginDir $ContentPlugin -EngineRoot "$Temp\nowhere" -EngineVersion '9.9' }
+	Check 'an engine without its source only warns' ($script:TooNew -eq 0 -and @($Annotations | Where-Object { $_ -like '::warning*not checked*' }).Count -eq 1) ($Annotations -join "`n")
+
 	Write-Host 'Engine lookup'
 	$FakeEngine = Join-Paths $Temp 'UE_9.9'
 	New-TestFile "$FakeEngine\Engine\Build\BatchFiles\RunUAT.bat" '@echo off'

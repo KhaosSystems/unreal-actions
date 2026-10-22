@@ -844,6 +844,161 @@ function Get-FileSha256([string]$Path)
 
 #endregion
 
+#region Content versions
+
+# A custom version GUID as the engine declares it, FGuid(A, B, C, D), and as a package stores it: four
+# little-endian uint32s.
+function Format-CustomVersionKey([uint32[]]$Parts)
+{
+	return ($Parts | ForEach-Object { $_.ToString('X8') }) -join '-'
+}
+
+<#
+.SYNOPSIS
+The custom versions a .uasset or .umap was saved with, read from its package file summary.
+
+.DESCRIPTION
+Each system that changes how it saves bumps its own custom version, and the package records the
+version of each one it used. An engine refuses a package with any version newer than its own.
+
+.OUTPUTS
+Key (see Format-CustomVersionKey) and Version for each, or nothing for a file that is not an
+uncooked package of a known layout.
+#>
+function Get-UnrealPackageCustomVersions([string]$Path)
+{
+	$Stream = [IO.File]::OpenRead($Path)
+	try
+	{
+		$Reader = New-Object IO.BinaryReader($Stream)
+		# PACKAGE_FILE_TAG; PowerShell reads the literal as a signed int, so read the tag as one too.
+		if ($Stream.Length -lt 32 -or $Reader.ReadInt32() -ne 0x9E2A83C1) { return }
+
+		# The layout of FPackageFileSummary, in PackageFileSummary.cpp.
+		$LegacyFileVersion = $Reader.ReadInt32()
+		if ($LegacyFileVersion -gt -6) { return } # before the custom version format read here
+		if ($LegacyFileVersion -ne -4) { $null = $Reader.ReadInt32() } # LegacyUE3Version
+		$FileVersionUE4 = $Reader.ReadInt32()
+		$FileVersionUE5 = 0
+		if ($LegacyFileVersion -le -8) { $FileVersionUE5 = $Reader.ReadInt32() }
+		$null = $Reader.ReadInt32() # FileVersionLicenseeUE
+		if ($FileVersionUE4 -eq 0 -and $FileVersionUE5 -eq 0) { return } # unversioned, as cooked
+		if ($FileVersionUE5 -ge 1016) { $null = $Reader.ReadBytes(24) } # PACKAGE_SAVED_HASH: SavedHash, TotalHeaderSize
+
+		$Count = $Reader.ReadInt32()
+		if ($Count -lt 0 -or $Count -gt 4096) { return }
+		for ($Index = 0; $Index -lt $Count; ++$Index)
+		{
+			$Key = Format-CustomVersionKey @($Reader.ReadUInt32(), $Reader.ReadUInt32(), $Reader.ReadUInt32(), $Reader.ReadUInt32())
+			[pscustomobject]@{ Key = $Key; Version = $Reader.ReadInt32() }
+		}
+	}
+	catch [IO.EndOfStreamException] { }
+	finally
+	{
+		$Stream.Dispose()
+	}
+}
+
+<#
+.SYNOPSIS
+The newest custom versions an installed engine saves, for the version streams it lists in source.
+
+.DESCRIPTION
+The engine's main version streams (FortniteMain, UE5Main, UE5Release and others) list every version
+with its number in Engine/Source/Runtime/Core/Public/UObject/*.inl, and DevObjectVersion.cpp gives
+each stream's GUID. Launcher installs ship both. Nothing is returned if they cannot be read.
+
+.OUTPUTS
+A hashtable from key (see Format-CustomVersionKey) to Name and Latest.
+#>
+function Get-EngineCustomVersionLimits([string]$EngineRoot)
+{
+	$Limits = @{}
+	$Core = Join-Paths $EngineRoot 'Engine' 'Source' 'Runtime' 'Core'
+	$Registry = Join-Paths $Core 'Private' 'UObject' 'DevObjectVersion.cpp'
+	$Lists = Join-Paths $Core 'Public' 'UObject'
+	if (-not (Test-Path -LiteralPath $Registry) -or -not (Test-Path -LiteralPath $Lists)) { return $Limits }
+
+	$Guids = @{}
+	$Pattern = 'const\s+FGuid\s+F(\w+)::GUID\(\s*0x([0-9A-Fa-f]+)\s*,\s*0x([0-9A-Fa-f]+)\s*,\s*0x([0-9A-Fa-f]+)\s*,\s*0x([0-9A-Fa-f]+)\s*\)'
+	foreach ($Match in [regex]::Matches([IO.File]::ReadAllText($Registry), $Pattern))
+	{
+		$Parts = @(2..5 | ForEach-Object { [Convert]::ToUInt32($Match.Groups[$_].Value, 16) })
+		$Guids[$Match.Groups[1].Value] = Format-CustomVersionKey $Parts
+	}
+
+	foreach ($List in Get-ChildItem -LiteralPath $Lists -Filter '*.inl' -File)
+	{
+		$Numbers = @([regex]::Matches([IO.File]::ReadAllText($List.FullName), '(?m)^[ \t]*[A-Z0-9_]+_VERSION\(\s*\w+\s*,\s*(\d+)\s*\)') | ForEach-Object { [int]$_.Groups[1].Value })
+		if ($Numbers.Count -eq 0) { continue }
+
+		# FortniteMainBranchObjectVersions.inl lists FFortniteMainBranchObjectVersion.
+		$Name = $List.BaseName
+		if (-not $Guids.ContainsKey($Name) -and $Name.EndsWith('s')) { $Name = $Name.Substring(0, $Name.Length - 1) }
+		if (-not $Guids.ContainsKey($Name)) { continue }
+
+		$Limits[$Guids[$Name]] = [pscustomobject]@{
+			Name = $Name
+			Latest = ($Numbers | Measure-Object -Maximum).Maximum
+		}
+	}
+	return $Limits
+}
+
+<#
+.SYNOPSIS
+Report the plugin's assets that an engine cannot load because a newer engine saved them.
+
+.DESCRIPTION
+5.8 loads what 5.7 saved, never the reverse, so content has to be saved with the oldest engine a
+plugin supports. Each asset is an error annotation naming the versions that are too new.
+
+.OUTPUTS
+The number of such assets.
+#>
+function Test-PluginContentVersions
+{
+	param(
+		[Parameter(Mandatory)][string]$PluginDir,
+		[Parameter(Mandatory)][string]$EngineRoot,
+		[Parameter(Mandatory)][string]$EngineVersion
+	)
+
+	$Content = Join-Paths $PluginDir 'Content'
+	if (-not (Test-Path -LiteralPath $Content)) { return 0 }
+	$Assets = @(Get-ChildItem -LiteralPath $Content -Recurse -File | Where-Object { $_.Extension -eq '.uasset' -or $_.Extension -eq '.umap' })
+	if ($Assets.Count -eq 0) { return 0 }
+
+	$Limits = Get-EngineCustomVersionLimits $EngineRoot
+	if ($Limits.Count -eq 0)
+	{
+		Write-CiAnnotation warning "Could not read which asset versions Unreal Engine $EngineVersion supports from its source, so the content was not checked against it." -Title 'Content not checked'
+		return 0
+	}
+
+	$Root = (Get-FullPath $PluginDir).TrimEnd('\', '/')
+	$TooNew = 0
+	foreach ($Asset in $Assets)
+	{
+		$Newer = @()
+		foreach ($Saved in @(Get-UnrealPackageCustomVersions $Asset.FullName))
+		{
+			$Limit = $Limits[$Saved.Key]
+			if ($Limit -and $Saved.Version -gt $Limit.Latest) { $Newer += "$($Limit.Name) $($Saved.Version), newest $($Limit.Latest)" }
+		}
+		if ($Newer.Count -gt 0)
+		{
+			$TooNew++
+			$Relative = $Asset.FullName.Substring($Root.Length + 1).Replace('\', '/')
+			Write-CiAnnotation error "Saved by a newer engine than Unreal Engine $EngineVersion, which cannot load it ($($Newer -join '; ')). Save content with the oldest engine the plugin supports." -File $Relative -Title "Too new for UE $EngineVersion"
+		}
+	}
+	return $TooNew
+}
+
+#endregion
+
 #region Build output
 
 <#

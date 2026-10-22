@@ -57,6 +57,14 @@ $PluginName = $Descriptor.Name
 
 $ReportDiagnostic = New-CompileDiagnosticReporter -PluginName $PluginName -Label "UE $EngineVersion"
 
+# An engine cannot load an asset saved by a newer one, and BuildPlugin never loads content, so this
+# is the only place a 5.8-saved asset in a 5.7 package gets caught before buyers find it.
+$TooNew = Test-PluginContentVersions -PluginDir $Descriptor.Dir -EngineRoot $EngineRoot -EngineVersion $EngineVersion
+if ($TooNew -gt 0)
+{
+	throw "$TooNew asset(s) were saved by a newer engine than Unreal Engine $EngineVersion and cannot load in it."
+}
+
 function Invoke-BuildPlugin([string]$PackageDir, [string]$LogName, [string[]]$Extra)
 {
 	# UAT writes its own and UBT's logs here, so they can be uploaded with the run.
