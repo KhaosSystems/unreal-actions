@@ -43,8 +43,9 @@ jobs:
 ```
 
 The plugin needs a `PlatformAllowList` on every module, a `Config/FilterPlugin.ini`, a copyright
-notice naming the descriptor's `CreatedBy` on the first line of every source file, and tests named
-`<Plugin>.<Area>.<Case>`. The first run says what is missing.
+notice with the year and the descriptor's `CreatedBy` on the first line of every source file (such as
+`// Copyright 2026 Example Studio. All Rights Reserved.`), and tests named `<Plugin>.<Area>.<Case>`.
+The first run says what is missing.
 
 **Commits** are [conventional commits](https://www.conventionalcommits.org), such as
 `fix: crash when saving` or `feat(ui): outline panel`; every pull request and push checks them.

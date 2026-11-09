@@ -64,8 +64,8 @@ function New-FixturePlugin([string]$Dir)
 	]
 }
 '@
-	New-TestFile "$Dir\Source\SampleEditor\SampleEditor.Build.cs" "// Copyright Example Studio. All Rights Reserved.`n"
-	New-TestFile "$Dir\Source\SampleEditor\Private\SampleEditor.cpp" "// Copyright Example Studio. All Rights Reserved.`n"
+	New-TestFile "$Dir\Source\SampleEditor\SampleEditor.Build.cs" "// Copyright 2026 Example Studio. All Rights Reserved.`n"
+	New-TestFile "$Dir\Source\SampleEditor\Private\SampleEditor.cpp" "// Copyright 2026 Example Studio. All Rights Reserved.`n"
 	New-TestFile "$Dir\Source\ThirdParty\Lib\lib.h" "/* MIT, someone else */`n"
 	New-TestFile "$Dir\Source\ThirdParty\Lib\LICENSE.txt" "MIT`n"
 	New-TestFile "$Dir\Content\Docs\Readme.md" "# Sample`n"
@@ -170,6 +170,11 @@ try
 			Name = "Epic's notice left in from a template"
 			Break = { New-TestFile "$Plugin\Source\SampleEditor\Private\New.h" "// Copyright Epic Games, Inc. All Rights Reserved.`n" }
 			Expect = "should name 'Example Studio'"
+		}
+		@{
+			Name = 'copyright notice without a year'
+			Break = { New-TestFile "$Plugin\Source\SampleEditor\Private\New.h" "// Copyright Example Studio. All Rights Reserved.`n" }
+			Expect = 'needs the year of publishing'
 		}
 		@{
 			Name = 'license file outside ThirdParty'
@@ -383,7 +388,7 @@ try
 	Check 'a bad engine version is rejected' $Threw
 
 	New-FixturePlugin $Plugin
-	New-TestFile "$Plugin\Source\SampleEditor\Private\Extra.cpp" "// Copyright Example Studio. All Rights Reserved.`n`nint A;`n   `nint B;`n"
+	New-TestFile "$Plugin\Source\SampleEditor\Private\Extra.cpp" "// Copyright 2026 Example Studio. All Rights Reserved.`n`nint A;`n   `nint B;`n"
 	New-TestFile "$Plugin\Source\ThirdParty\Lib\big.cpp" "int X;`nint Y;`n"
 	Check 'lines of code count non-blank own source only' ((Measure-PluginSource (Get-PluginDescriptor $Plugin)) -eq 5)
 
