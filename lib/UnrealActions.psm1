@@ -615,7 +615,7 @@ $script:DefaultRules = @(
 
 # What BuildPlugin itself copies into the plugin it builds, before FilterPlugin.ini adds to it
 # (FilterPluginFiles in BuildPluginCommand.Automation.cs). Epic builds the plugin Fab buyers download
-# this way, so whatever this leaves out, they do not get: notably Config.
+# this way, so whatever this leaves out, they do not get: notably Config and Docs.
 $script:BuildPluginRules = @(
 	'/Binaries/ThirdParty/...'
 	'/Resources/...'
@@ -1198,6 +1198,19 @@ function Test-PluginPackage
 		if (-not (Test-FilterRules $Shipped $File))
 		{
 			& $Fail "Fab buyers would not get $($File): BuildPlugin, which Epic builds the plugin with, copies Config files only when Config/FilterPlugin.ini lists them. Add /$File (or /Config/...) under [FilterPlugin]." $File
+		}
+	}
+
+	# Khaos Docs shows Docs in the editor's documentation window, so buyers need it as well.
+	$Docs = Find-DocsFolder $Descriptor.Dir $script:DocsBase
+	if ($Docs)
+	{
+		$Unshipped = @((Get-RelativeFiles (Join-Paths $Descriptor.Dir $Docs)) | Where-Object { $script:ExcludedFiles -notcontains [IO.Path]::GetFileName($_) } | ForEach-Object { "$Docs/$_" } | Where-Object { -not (Test-FilterRules $Shipped $_) })
+		if ($Unshipped.Count -gt 0)
+		{
+			$More = ''
+			if ($Unshipped.Count -gt 1) { $More = " and $($Unshipped.Count - 1) other file(s) in $Docs/" }
+			& $Fail "Fab buyers would not get $($Unshipped[0])$($More): BuildPlugin, which Epic builds the plugin with, copies $Docs/ only when Config/FilterPlugin.ini lists it. Add /$($script:DocsBase)/... under [FilterPlugin]." $Unshipped[0]
 		}
 	}
 

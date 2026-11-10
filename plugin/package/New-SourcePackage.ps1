@@ -5,8 +5,8 @@ Validate a plugin and write the source zips that get submitted to Fab, one per e
 .DESCRIPTION
 Each zip holds one folder named after the plugin, containing only what Fab expects of a code
 plugin: the descriptor, Source, Content, Config, Resources and Shaders, plus anything
-Config/FilterPlugin.ini adds. The descriptor in each zip is stamped with its EngineVersion and,
-for a release, with the version taken from the tag.
+Config/FilterPlugin.ini adds, such as Docs. The descriptor in each zip is stamped with its
+EngineVersion and, for a release, with the version taken from the tag.
 
 These zips are the artifact everything else works from. CI builds and tests the zip, not the
 checkout, so what passed is byte for byte what gets uploaded.

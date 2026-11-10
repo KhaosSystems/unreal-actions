@@ -251,6 +251,8 @@ try
 		,@('/a?c.txt', 'abc.txt', $true)
 		,@('/a?c.txt', 'a/c.txt', $false)
 		,@('/Extras...', 'Extras2/x.txt', $true)
+		,@('/Docs/...', 'Docs/Images/a.png', $true)
+		,@('/Docs/...', 'Content/Docs/a.md', $false)
 	)
 	foreach ($Case in $Cases)
 	{
@@ -322,6 +324,11 @@ try
 			Expect = 'file=Config/DefaultSample.ini'
 		}
 		@{
+			Name = 'docs that BuildPlugin leaves out'
+			Break = { New-TestFile "$Plugin\Config\FilterPlugin.ini" "[FilterPlugin]`n/Extras/...`n" }
+			Expect = 'file=Docs/Readme.md,title=Fab requirement::Fab buyers would not get Docs/Readme.md: BuildPlugin, which Epic builds the plugin with, copies Docs/ only when Config/FilterPlugin.ini lists it. Add /Docs/... under [FilterPlugin].'
+		}
+		@{
 			Name = 'module with no Build.cs'
 			Break = { Remove-Item "$Plugin\Source\SampleEditor\SampleEditor.Build.cs" }
 			Expect = 'no SampleEditor.Build.cs'
@@ -341,6 +348,15 @@ try
 	Add-Content "$Plugin\Config\FilterPlugin.ini" '/Config/DefaultSample.ini'
 	$Outcome = Test-Fixture $Plugin
 	Check 'a config file listed in FilterPlugin.ini is fine' ($Outcome.Errors.Count -eq 0) ($Outcome.Annotations -join "`n")
+
+	# Docs that FilterPlugin.ini lists in part: one error, naming the first file and counting the rest.
+	New-FixturePlugin $Plugin
+	New-TestFile "$Plugin\Config\FilterPlugin.ini" "[FilterPlugin]`n/Docs/*.md`n"
+	New-TestPng "$Plugin\Docs\Images\Shot.png"
+	New-TestFile "$Plugin\Docs\Images\Logo.svg" "<svg viewBox='0 0 1 1'></svg>`n"
+	New-TestFile "$Plugin\Docs\Images\Thumbs.db" 'junk'
+	$Outcome = Test-Fixture $Plugin
+	Check 'docs listed in part are one error, naming the first file left out' ($Outcome.Errors.Count -eq 1 -and $Outcome.Errors[0].StartsWith('::error file=Docs/Images/Logo.svg,title=Fab requirement::Fab buyers would not get Docs/Images/Logo.svg and 1 other file(s) in Docs/:')) ($Outcome.Annotations -join "`n")
 
 	New-FixturePlugin $Plugin
 	Remove-Item "$Plugin\Resources\Icon128.png"
@@ -387,6 +403,27 @@ try
 
 	Expand-PluginZip -ZipPath "$Temp\a.zip" -Destination "$Temp\x"
 	Check 'extracts back to the plugin' (Test-Path "$Temp\x\Sample\Source\SampleEditor\Private\SampleEditor.cpp")
+
+	Write-Host 'Source zips'
+	$PackageScript = Join-Path $Root 'plugin/package/New-SourcePackage.ps1'
+	New-FixturePlugin $Plugin
+	$Dist = Join-Paths $Temp 'dist'
+	$null = Get-Annotations { & $PackageScript -PluginDir $Plugin -OutDir $Dist -EngineVersions '5.8' -Version 'v1.2.3' }
+	$Entries = @()
+	if (Test-Path -LiteralPath "$Dist\Sample-1.2.3-UE5.8.zip")
+	{
+		$Archive = [System.IO.Compression.ZipFile]::OpenRead("$Dist\Sample-1.2.3-UE5.8.zip")
+		try { $Entries = @($Archive.Entries | ForEach-Object { $_.FullName }) } finally { $Archive.Dispose() }
+	}
+	Check 'the source zip has Docs when FilterPlugin.ini lists it' ($Entries -contains 'Sample/Docs/Readme.md' -and $Entries -contains 'Sample/Config/FilterPlugin.ini') ($Entries -join ', ')
+
+	New-TestFile "$Plugin\Config\FilterPlugin.ini" "[FilterPlugin]`n/Extras/...`n-/Extras/Private/...`n"
+	$Unlisted = Get-PluginPackageFiles (Get-PluginDescriptor $Plugin)
+	Check 'without /Docs/... the package leaves Docs out' ($Unlisted -contains 'Extras/Notes.txt' -and @($Unlisted | Where-Object { $_.StartsWith('Docs/') }).Count -eq 0) ($Unlisted -join ', ')
+	$UnlistedDist = Join-Paths $Temp 'dist-unlisted'
+	$script:Caught = $null
+	$Annotations = Get-Annotations { try { & $PackageScript -PluginDir $Plugin -OutDir $UnlistedDist -EngineVersions '5.8' -Version 'v1.2.3' } catch { $script:Caught = $_.Exception.Message } }
+	Check 'so packaging fails, saying to add /Docs/..., and writes no zip' ($script:Caught -like '*1 problem(s) that would get it declined on Fab*' -and @($Annotations | Where-Object { $_.StartsWith('::error file=Docs/Readme.md,') -and $_.Contains('Add /Docs/... under [FilterPlugin].') }).Count -eq 1 -and -not (Test-Path -LiteralPath $UnlistedDist)) "$script:Caught $($Annotations -join "`n")"
 
 	Write-Host 'Compiler output'
 	$Log = @(
