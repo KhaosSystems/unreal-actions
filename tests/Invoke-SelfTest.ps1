@@ -841,7 +841,8 @@ try
 		@{ Name = 'a skipped level after going back up'; Text = "# Title`n`n## A`n`n### B`n`n## C`n`n#### D`n"; Line = 9; Expect = 'skips a level, H2 to H4' }
 		@{ Name = 'a skipped level after a table and a thematic break'; Text = "# Title`n`nSettings:`n| Name | Default |`n| --- | --- |`n| a | b |`n---`n### Details`n"; Line = 8; Expect = 'skips a level, H1 to H3' }
 		@{ Name = 'a skipped level after a table in a quote'; Text = "# Title`n`n> | a | b |`n> | - | - |`n> | 1 | 2 |`n> ---`n> ### D`n"; Line = 7; Expect = 'skips a level, H1 to H3' }
-		@{ Name = 'a broken link in a table cell'; Text = "# Title`n`n| a | b |`n|---|---|`n| ok | [it](Missing.md) |`n"; Line = 5; Expect = 'is broken' }
+		@{ Name = 'a second H1 under a line that only looks like a table header, as it carries on lazily'; Text = "# Title`n`n> x`na | b`n> --|--`n> ===`n"; Line = 3; Expect = 'More than one H1' }
+		@{ Name = 'a broken link in a table cell';Text = "# Title`n`n| a | b |`n|---|---|`n| ok | [it](Missing.md) |`n"; Line = 5; Expect = 'is broken' }
 		@{ Name = 'raw HTML in a table row without pipes'; Text = "# Title`n`n| a |`n|---|`n<b>x</b>`n"; Line = 5; Expect = 'Raw HTML is not allowed: <b>' }
 		@{ Name = 'raw HTML with a backtick in an attribute'; Text = ("# Title`n`n" + '<b title="`">x</b> and `y`.' + "`n"); Line = 3; Expect = 'Raw HTML is not allowed: <b title="`">' }
 		@{ Name = 'a broken link whose anchor holds a backtick'; Text = ("# Title`n`n" + 'See [it](Missing.md#a`b) and `x`.' + "`n"); Line = 3; Expect = 'is broken' }
