@@ -89,9 +89,10 @@ if ($Response.ExitCode -ne 0)
 $Release = ($Response.Output -join "`n") | ConvertFrom-Json
 $Tag = $Release.tag_name
 
+# Source zips only: a release can also carry a docs zip.
 $Zips = @($Release.assets | ForEach-Object {
-	$Match = [regex]::Match($_.name, '-UE(\d+\.\d+)\.zip$')
-	if ($Match.Success) { [pscustomobject]@{ Name = $_.name; Engine = [version]$Match.Groups[1].Value } }
+	$Engine = Get-PackageEngineVersion $_.name
+	if ($Engine) { [pscustomobject]@{ Name = $_.name; Engine = [version]$Engine } }
 } | Sort-Object Engine)
 if ($Zips.Count -eq 0) { throw "$Plugin $Tag has no source zips." }
 

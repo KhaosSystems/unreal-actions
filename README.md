@@ -3,7 +3,8 @@
 GitHub Actions for Unreal Engine projects, grouped by what they work on.
 
 `plugin/` covers code plugins sold on Fab: it checks a plugin against Fab's requirements, builds
-its source zip the way Epic does, runs its tests, releases it, and keeps its README badges current.
+its source zip the way Epic does, runs its tests, releases it, publishes its docs, and keeps its
+README badges current.
 `commits/` checks commit messages and works out version numbers from them. `game/` runs in a game
 repository: it brings in private plugins' releases.
 
@@ -63,6 +64,8 @@ the Fab publisher portal. Pushing a `vX.Y.Z` tag yourself still works too.
 | [`plugin/build`](plugin/build/action.yml) | BuildPlugin on that zip against a Launcher-installed engine, plus a strict-includes pass. |
 | [`plugin/test`](plugin/test/action.yml) | The plugin's automation tests in a headless editor. |
 | [`plugin/release`](plugin/release/action.yml) | GitHub release, the `release` branch games follow, and the Fab checklist. |
+| [`plugin/docs`](plugin/docs/action.yml) | Builds `Content/Docs` into a docs bundle and checks it; for a release, zips it. |
+| [`plugin/publish-docs`](plugin/publish-docs/action.yml) | Pushes a docs bundle to `KhaosSystems/docs-content`, which deploys the docs site. |
 | [`plugin/badges`](plugin/badges/action.yml) | Tests, engine versions and lines of code, for the README. Public repositories only. |
 | [`commits/check`](commits/check/action.yml) | Fails when a commit message is not a conventional commit. |
 | [`commits/next-version`](commits/next-version/action.yml) | The next semver version from the commits since the last release. |
@@ -70,6 +73,44 @@ the Fab publisher portal. Pushing a `vX.Y.Z` tag yourself still works too.
 
 [`plugin.yml`](.github/workflows/plugin.yml) chains them; they can also be used one by one, as
 `KhaosSystems/unreal-actions/<group>/<action>@v1`.
+
+### Docs
+
+With `publish-docs`, each release also publishes the plugin's `Content/Docs` to
+[docs.khaos.systems](https://docs.khaos.systems):
+
+```yaml
+    with:
+      publish-docs: true
+    secrets:
+      docs-token: ${{ secrets.KHAOS_DOCS_TOKEN }}
+```
+
+The release builds a docs bundle from the released commit and checks it before publishing
+anything. It attaches the bundle as `<Repo>-<version>-docs.zip` with a `.sha256`. Then the `docs`
+job pushes it to `KhaosSystems/docs-content`, which deploys the site. That repository's README is
+the contract.
+
+`KHAOS_DOCS_TOKEN` is an organization secret: a fine-grained token owned by KhaosSystems, with
+*Contents* read and write on `KhaosSystems/docs-content` and *Actions* read and write on
+`KhaosSystems/website`. Create it before any plugin opts in. Two steps see it: the push, and on a
+release the token check before the build. A release whose token is missing or expired fails there.
+
+Every run checks the docs against the contract's rules: errors with `publish-docs`, warnings
+without.
+
+If the push fails, re-run the failed jobs. The release is left alone: the `docs` job pushes the same
+bundle and replaces only that version's folder. `notify` runs again too, and posts only the docs
+result.
+
+To preview docs on the site, build a bundle from a checkout into the website's bundles folder:
+
+```powershell
+.\plugin\docs\New-DocsBundle.ps1 -PluginDir ..\MyPlugin -OutDir ..\website\docs\src\content\bundles -EngineVersions 5.8
+```
+
+It writes `unreal/<slug>/preview/` and prints any problems. If you set `DOCS_BUNDLES` for the site,
+use that folder as `-OutDir`. The website's `docs/README.md` has the details.
 
 ### Badges
 
