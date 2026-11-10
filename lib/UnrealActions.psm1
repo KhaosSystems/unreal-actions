@@ -1651,10 +1651,16 @@ $script:DocsTextTypes = @('.md', '.svg')
 $script:DocsMaxImageBytes = 5000000
 $script:DocsMaxBundleBytes = 25000000
 $script:DocsRequiredKeys = @('schema', 'section', 'slug', 'name', 'description', 'landing', 'version', 'preview', 'released', 'repo', 'private', 'ref', 'commit', 'base')
+# docs.json values as the site's JavaScript checks them: its \d and \w are ASCII, and its $ is the
+# end of the text, which .NET writes \z.
+$script:DocsDatePattern = '^[0-9]{4}-[0-9]{2}-[0-9]{2}\z'
+$script:DocsCommitPattern = '^[0-9a-f]{40}\z'
+$script:DocsRepoPattern = '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z'
+$script:DocsSlugPattern = '^[a-z0-9]+(-[a-z0-9]+)*\z'
 # supportUrl and fabUrl: the site takes an http(s) URL or null.
-$script:DocsUrlPattern = '^https?://\S+$'
+$script:DocsUrlPattern = '^https?://\S+\z'
 # First parts of a page's URL the site keeps for versions: /v1.2.0/, /preview/, /releases/.
-$script:DocsReservedSegment = '^(v\d.*|preview|releases)$'
+$script:DocsReservedSegment = '^(v[0-9].*|preview|releases)\z'
 
 # Raw HTML as CommonMark reads it: tags and the block starts that need no closing tag.
 $script:HtmlOpenTag = '<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:"[^"]*"|''[^'']*''|[^\s"''=<>`]+))?)*\s*/?>'
@@ -1747,15 +1753,59 @@ function ConvertTo-SortedJson
 	throw "Cannot write a $($Value.GetType().Name) as JSON."
 }
 
+<# Whether bytes start with a UTF-16 byte order mark. #>
+function Test-Utf16Bom([byte[]]$Bytes)
+{
+	return ($Bytes.Length -ge 2 -and (($Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE) -or ($Bytes[0] -eq 0xFE -and $Bytes[1] -eq 0xFF)))
+}
+
 <# A page saved as UTF-16, as Windows PowerShell's > and Out-File write it, as UTF-8. Other bytes come back unchanged. #>
 function ConvertFrom-Utf16Bytes([byte[]]$Bytes)
 {
-	if ($Bytes.Length -lt 2) { return ,$Bytes }
-	$BigEndian = ($Bytes[0] -eq 0xFE -and $Bytes[1] -eq 0xFF)
-	if (-not $BigEndian -and -not ($Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE)) { return ,$Bytes }
+	if (-not (Test-Utf16Bom $Bytes)) { return ,$Bytes }
+	$BigEndian = ($Bytes[0] -eq 0xFE)
 	try { $Text = (New-Object System.Text.UnicodeEncoding $BigEndian, $false, $true).GetString($Bytes, 2, $Bytes.Length - 2) }
 	catch { return ,$Bytes }
 	return ,$script:Utf8NoBom.GetBytes($Text)
+}
+
+<#
+.SYNOPSIS
+Whether two names are the same character for character, as git, Linux and the docs site compare
+them. PowerShell's -ceq compares by culture: it skips soft hyphens and takes ss for a German sharp s.
+#>
+function Test-SameName([string]$A, [string]$B, [switch]$IgnoreCase)
+{
+	if ($IgnoreCase) { return [string]::Equals($A, $B, [StringComparison]::OrdinalIgnoreCase) }
+	return [string]::Equals($A, $B, [StringComparison]::Ordinal)
+}
+
+<# Whether a list holds a name, compared as Test-SameName does. #>
+function Test-NameIn([string]$Name, [string[]]$List)
+{
+	return ([Array]::IndexOf($List, $Name) -ge 0)
+}
+
+<#
+.SYNOPSIS
+A member of a JSON object by its exact name, as JavaScript reads it.
+.OUTPUTS
+Has, and Value, with an array kept whole. Nothing is read from what is not a JSON object.
+#>
+function Get-JsonMember($Object, [string]$Name)
+{
+	$Member = [pscustomobject]@{ Has = $false; Value = $null }
+	if ($Object -isnot [System.Management.Automation.PSCustomObject]) { return $Member }
+	foreach ($Property in $Object.PSObject.Properties)
+	{
+		if (Test-SameName $Property.Name $Name)
+		{
+			$Member.Has = $true
+			$Member.Value = $Property.Value
+			break
+		}
+	}
+	return $Member
 }
 
 <# Every file below a folder, as sorted '/'-separated relative paths. #>
@@ -1769,7 +1819,8 @@ function Get-RelativeFiles([string]$Dir)
 
 function Read-DocsManifest([string]$BundleDir)
 {
-	$Path = Join-Paths $BundleDir 'docs.json'
+	# .NET reads a relative path from the process's folder, which cd does not change.
+	$Path = Join-Paths (Get-FullPath $BundleDir) 'docs.json'
 	if (-not (Test-Path -LiteralPath $Path)) { throw "$BundleDir has no docs.json." }
 	try { return ([IO.File]::ReadAllText($Path) | ConvertFrom-Json) }
 	catch { throw "docs.json is not valid JSON: $($_.Exception.Message)" }
@@ -1778,7 +1829,7 @@ function Read-DocsManifest([string]$BundleDir)
 <# A release version as docs.json and the site write it: 1.0.1 or 1.1.0-rc.1, no v. #>
 function Test-DocsVersion($Version)
 {
-	return ($Version -is [string] -and $Version -cmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$')
+	return ($Version -is [string] -and $Version -cmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\z')
 }
 
 <# Where a bundle goes in docs-content: section/slug/version, section/slug/preview, or section/slug/current for docs with no version. #>
@@ -1803,7 +1854,7 @@ Path, and Problem when the site cannot give the page that URL.
 #>
 function Get-DocsPagePath([string]$File, [string]$Landing)
 {
-	if ($File -ceq $Landing) { return [pscustomobject]@{ Path = ''; Problem = $null } }
+	if (Test-SameName $File $Landing) { return [pscustomobject]@{ Path = ''; Problem = $null } }
 	$Segments = @(($File -replace '\.md$', '').Split('/') | ForEach-Object { ConvertTo-KebabCase $_ })
 	$Path = ($Segments -join '/') + '/'
 	$Problem = $null
@@ -1818,11 +1869,11 @@ Build a plugin's docs bundle: Content/Docs plus docs.json, in <OutDir>/<section>
 
 .DESCRIPTION
 Pages (.md, in that case) and images keep their paths below Content/Docs. Pages and SVGs get LF line
-endings; a page loses any UTF-8 byte order mark, and one saved as UTF-16 becomes UTF-8. Anything
-else is left out with a warning. The version folder is emptied first, so a page deleted since the
-last build disappears, and nothing beside it is touched. docs.json has sorted keys and no
-timestamps, so the same input gives the same bytes. An empty Version builds a preview, in a folder
-named preview.
+endings; a page loses any UTF-8 byte order mark, and one saved as UTF-16 becomes UTF-8. An SVG saved
+as UTF-16, and anything else, is left out with a warning. The version folder is emptied first, so a
+page deleted since the last build disappears, and nothing beside it is touched. docs.json has sorted
+keys and no timestamps, so the same input gives the same bytes. An empty Version builds a preview,
+in a folder named preview.
 
 name, description, supportUrl and fabUrl come from the .uplugin, the slug from the repository name.
 A URL that is not http(s) is left out with a warning, as the site takes no other.
@@ -1850,9 +1901,9 @@ function New-DocsBundle
 		[string]$Section = 'unreal'
 	)
 
-	if ($Repo -notmatch '^[\w.-]+/[\w.-]+$') { throw "Repo must be owner/name, not '$Repo'." }
-	if ($Commit -cnotmatch '^[0-9a-f]{40}$') { throw "Commit must be a full 40-character SHA, not '$Commit'." }
-	if ($Released -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { throw "Released must be YYYY-MM-DD, not '$Released'." }
+	if ($Repo -cnotmatch $script:DocsRepoPattern) { throw "Repo must be owner/name, not '$Repo'." }
+	if ($Commit -cnotmatch $script:DocsCommitPattern) { throw "Commit must be a full 40-character SHA, not '$Commit'." }
+	if ($Released -cnotmatch $script:DocsDatePattern) { throw "Released must be YYYY-MM-DD, not '$Released'." }
 
 	$Descriptor = Get-PluginDescriptor $PluginDir
 	$Source = Join-Paths $Descriptor.Dir 'Content' 'Docs'
@@ -1918,30 +1969,38 @@ function New-DocsBundle
 		if ($script:ExcludedFiles -contains [IO.Path]::GetFileName($Relative)) { continue }
 
 		$Extension = [IO.Path]::GetExtension($Relative)
-		$IsPage = $Extension -ceq '.md'
-		if (-not $IsPage -and $script:DocsImageTypes -notcontains $Extension.ToLowerInvariant())
+		$IsPage = Test-SameName $Extension '.md'
+		$Shown = "$($script:DocsBase)/$Relative"
+		if (-not $IsPage -and -not (Test-NameIn $Extension.ToLowerInvariant() $script:DocsImageTypes))
 		{
 			$Hint = ''
-			if ($Extension -eq '.md') { $Hint = ' Rename it to end in .md, in lowercase.' }
-			if ($Extension -eq '.txt') { $Hint = ' KhaosDocs shows .txt files in the editor, but the site does not; rename it to .md to publish it.' }
-			Write-CiAnnotation warning "Left out of the docs: the docs site takes only .md pages and .png, .jpg, .jpeg, .webp, .gif and .svg images.$Hint" -File "$($script:DocsBase)/$Relative" -Title 'Docs'
+			if (Test-SameName $Extension '.md' -IgnoreCase) { $Hint = ' Rename it to end in .md, in lowercase.' }
+			if (Test-SameName $Extension '.txt' -IgnoreCase) { $Hint = ' KhaosDocs shows .txt files in the editor, but the site does not; rename it to .md to publish it.' }
+			Write-CiAnnotation warning "Left out of the docs: the docs site takes only .md pages and .png, .jpg, .jpeg, .webp, .gif and .svg images.$Hint" -File $Shown -Title 'Docs'
 			continue
 		}
 
 		$From = Join-Paths $Source $Relative
 		$To = Join-Paths $Target $Relative
-		New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($To)) -Force | Out-Null
-		if ($script:DocsTextTypes -contains $Extension)
+		if (Test-NameIn $Extension.ToLowerInvariant() $script:DocsTextTypes)
 		{
 			$Bytes = [IO.File]::ReadAllBytes($From)
 			if ($IsPage) { $Bytes = ConvertFrom-Utf16Bytes $Bytes }
+			elseif (Test-Utf16Bom $Bytes)
+			{
+				# Converting it is not enough: its XML declaration says UTF-16.
+				Write-CiAnnotation warning 'Left out of the docs: the SVG is saved as UTF-16, which the docs site cannot read. Save it as UTF-8.' -File $Shown -Title 'Docs'
+				continue
+			}
 			$Text = $Latin1.GetString($Bytes).Replace("`r`n", "`n").Replace("`r", "`n")
 			# A page's UTF-8 byte order mark, which Windows editors add, would sit before its H1.
 			if ($IsPage -and $Text.StartsWith($Latin1.GetString([byte[]](0xEF, 0xBB, 0xBF)))) { $Text = $Text.Substring(3) }
+			New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($To)) -Force | Out-Null
 			[IO.File]::WriteAllBytes($To, $Latin1.GetBytes($Text))
 		}
 		else
 		{
+			New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($To)) -Force | Out-Null
 			[IO.File]::Copy($From, $To, $true)
 		}
 		$Files.Add($Relative)
@@ -1978,6 +2037,7 @@ function New-DocsBundleZip
 		[Parameter(Mandatory)][string]$OutDir
 	)
 
+	$BundleDir = Get-FullPath $BundleDir
 	$Manifest = Read-DocsManifest $BundleDir
 	if ($Manifest.preview) { throw 'A preview bundle has no release to attach to.' }
 
@@ -2043,8 +2103,8 @@ function Find-DocsFile([string]$Root, [string]$Path)
 	{
 		if (-not [IO.Directory]::Exists($Dir)) { return $null }
 		$Names = @([IO.Directory]::GetFileSystemEntries($Dir) | ForEach-Object { [IO.Path]::GetFileName($_) })
-		$Name = @($Names | Where-Object { $_ -ceq $Part })[0]
-		if (-not $Name) { $Name = @($Names | Where-Object { $_ -eq $Part })[0] }
+		$Name = @($Names | Where-Object { Test-SameName $_ $Part })[0]
+		if (-not $Name) { $Name = @($Names | Where-Object { Test-SameName $_ $Part -IgnoreCase })[0] }
 		if (-not $Name) { return $null }
 		$Found += $Name
 		$Dir = Join-Paths $Dir $Name
@@ -2056,7 +2116,7 @@ function Find-DocsFile([string]$Root, [string]$Path)
 function Get-DocsFolderProblem([string]$PluginDir)
 {
 	$Found = Find-DocsFile $PluginDir $script:DocsBase
-	if (-not $Found -or $Found -ceq $script:DocsBase) { return $null }
+	if (-not $Found -or (Test-SameName $Found $script:DocsBase)) { return $null }
 	return "The docs folder is $Found. Rename it to $($script:DocsBase): Windows does not mind the case, but GitHub and the docs site do."
 }
 
@@ -2064,8 +2124,9 @@ function Get-DocsFolderProblem([string]$PluginDir)
 function Get-DocsFileProblem([string]$BundleDir, [string]$Path, [string]$Url, [string]$What)
 {
 	$Actual = Find-DocsFile $BundleDir $Path
-	if (-not $Actual) { return "$What $Url is broken: there is no $Path in the docs." }
-	if ($Actual -cne $Path) { return "$What $Url has the wrong case: the file is $Actual. Windows does not mind; GitHub and the docs site do." }
+	# A folder is no file, whatever its name.
+	if (-not $Actual -or -not [IO.File]::Exists((Join-Paths $BundleDir $Actual))) { return "$What $Url is broken: there is no $Path in the docs." }
+	if (-not (Test-SameName $Actual $Path)) { return "$What $Url has the wrong case: the file is $Actual. Windows does not mind; GitHub and the docs site do." }
 	return $null
 }
 
@@ -2111,7 +2172,7 @@ function Get-DocsLinkProblem
 	$Target = ConvertFrom-UrlEscapes ($Url -split '#', 2)[0]
 	if ($null -eq $Target) { return "Link $Url is not a valid link: each % must start a UTF-8 escape, such as %20. Write a plain % as %25." }
 	$Resolved = Resolve-DocsPath $Dir $Target
-	if ($Resolved.Up -eq 0 -and $Resolved.Path -match '\.md$')
+	if ($Resolved.Up -eq 0 -and $Resolved.Path -match '\.md\z')
 	{
 		return Get-DocsFileProblem $BundleDir $Resolved.Path $Url 'Link'
 	}
@@ -2217,9 +2278,10 @@ function Get-MarkdownHeadingText([string]$Text, [hashtable]$Labels = @{})
 The links, images and raw HTML in a run of Markdown lines, such as a paragraph.
 
 .DESCRIPTION
-Read left to right, as CommonMark does: code spans first, then autolinks and raw HTML, which bind
-tighter than the brackets of a link. A reference image, ![alt][label] with label defined, comes
-back as an imageref with its label.
+Read in one pass from left to right, as CommonMark does: whichever starts first of a code span, raw
+HTML or an autolink wins, and all three bind tighter than the brackets of a link. A link's
+destination is read where its ] is, so text after it cannot take it apart. A reference image,
+![alt][label] with label defined, comes back as an imageref with its label.
 
 .PARAMETER Lines
 The lines, each with Line (its number in the file) and Text.
@@ -2246,11 +2308,11 @@ function Get-DocsInlineItems
 		$Text += [string]$Entry.Text
 	}
 	$Length = $Text.Length
-	# A copy that blanks what has been dealt with, keeping every offset. Its string form is rebuilt
-	# only after a change, so a paragraph full of < stays linear.
+	# The text read so far, with code spans, escapes and link targets blanked, keeping every offset,
+	# so a look back sees only what is still plain text.
 	$Masked = $Text.ToCharArray()
-	$Copy = @{ Text = $null }
 	$Items = New-Object System.Collections.Generic.List[object]
+	$Punctuation = '!"#$%&''()*+,-./:;<=>?@[\]^_`{|}~'
 
 	$LineAt = {
 		param([int]$Offset)
@@ -2261,67 +2323,61 @@ function Get-DocsInlineItems
 	$Blank = {
 		param([int]$From, [int]$To)
 		for ($K = $From; $K -lt $To; ++$K) { if ($Masked[$K] -ne "`n") { $Masked[$K] = ' ' } }
-		$Copy.Text = $null
 	}
 	$Add = {
 		param([string]$Kind, [string]$Value, [int]$Offset)
 		$Items.Add([pscustomobject]@{ Kind = $Kind; Value = $Value; Line = (& $LineAt $Offset) })
 	}
+	# Whether the backslash at an offset escapes the character after it: ASCII punctuation.
+	$Escapes = { param([int]$At) return ($At + 1 -lt $Length -and $Punctuation.IndexOf($Text[$At + 1]) -ge 0) }
 
-	# Code spans: a run of backticks up to the next run of the same length.
-	$Index = 0
-	while ($Index -lt $Length)
-	{
-		if ($Text[$Index] -eq '\') { $Index += 2; continue }
-		if ($Text[$Index] -ne '`') { $Index++; continue }
-		$Run = 0
-		while ($Index + $Run -lt $Length -and $Text[$Index + $Run] -eq '`') { $Run++ }
-		$Search = $Index + $Run
-		$Close = -1
-		while ($Search -lt $Length)
-		{
-			$Next = $Text.IndexOf([char]'`', $Search)
-			if ($Next -lt 0) { break }
-			$CloseRun = 0
-			while ($Next + $CloseRun -lt $Length -and $Text[$Next + $CloseRun] -eq '`') { $CloseRun++ }
-			if ($CloseRun -eq $Run) { $Close = $Next; break }
-			$Search = $Next + $CloseRun
-		}
-		if ($Close -lt 0) { $Index += $Run; continue }
-		& $Blank $Index ($Close + $Run)
-		$Index = $Close + $Run
-	}
-
-	# Backslash escapes become a character no rule below looks at.
-	$Punctuation = '!"#$%&''()*+,-./:;<=>?@[\]^_`{|}~'
-	for ($K = 0; $K -lt $Length - 1; ++$K)
-	{
-		if ($Masked[$K] -eq '\' -and $Punctuation.IndexOf($Masked[$K + 1]) -ge 0)
-		{
-			$Masked[$K] = [char]1
-			$Masked[$K + 1] = [char]1
-			$K++
-		}
-	}
-
-	# Brackets waiting for their ], innermost last. A link inside a link is not one, so a link
-	# makes the brackets before it inactive.
+	# Brackets waiting for their ], innermost last.
 	$Openers = New-Object System.Collections.Generic.List[object]
 	$Index = 0
 	while ($Index -lt $Length)
 	{
-		$Char = $Masked[$Index]
+		$Char = $Text[$Index]
+
+		# An escaped character is plain text.
+		if ($Char -eq '\' -and (& $Escapes $Index))
+		{
+			$Masked[$Index] = [char]1
+			$Masked[$Index + 1] = [char]1
+			$Index += 2
+			continue
+		}
+
+		# A code span: a run of backticks up to the next run of the same length.
+		if ($Char -eq '`')
+		{
+			$Run = 0
+			while ($Index + $Run -lt $Length -and $Text[$Index + $Run] -eq '`') { $Run++ }
+			$Search = $Index + $Run
+			$Close = -1
+			while ($Search -lt $Length)
+			{
+				$Next = $Text.IndexOf([char]'`', $Search)
+				if ($Next -lt 0) { break }
+				$CloseRun = 0
+				while ($Next + $CloseRun -lt $Length -and $Text[$Next + $CloseRun] -eq '`') { $CloseRun++ }
+				if ($CloseRun -eq $Run) { $Close = $Next; break }
+				$Search = $Next + $CloseRun
+			}
+			if ($Close -lt 0) { $Index += $Run; continue }
+			& $Blank $Index ($Close + $Run)
+			$Index = $Close + $Run
+			continue
+		}
+
 		if ($Char -eq '<')
 		{
 			# Raw HTML before autolinks, as the site's parser reads <!x@example.com>. An email
 			# autolink holds nothing the rules look at, so it is left as text.
-			if ($null -eq $Copy.Text) { $Copy.Text = New-Object string (,$Masked) }
-			$Current = $Copy.Text
-			$Match = $script:InlineHtmlPattern.Match($Current, $Index)
-			if ($Match.Success) { & $Add 'html' $Text.Substring($Index, $Match.Length) $Index }
+			$Match = $script:InlineHtmlPattern.Match($Text, $Index)
+			if ($Match.Success) { & $Add 'html' $Match.Value $Index }
 			else
 			{
-				$Match = $script:AutolinkPattern.Match($Current, $Index)
+				$Match = $script:AutolinkPattern.Match($Text, $Index)
 				if ($Match.Success) { & $Add 'link' $Match.Groups[1].Value $Index }
 			}
 			if (-not $Match.Success) { $Index++; continue }
@@ -2329,6 +2385,7 @@ function Get-DocsInlineItems
 			$Index += $Match.Length
 			continue
 		}
+
 		if ($Char -eq '[')
 		{
 			$Openers.Add([pscustomobject]@{ At = $Index; Image = ($Index -gt 0 -and $Masked[$Index - 1] -eq '!'); Active = $true })
@@ -2346,26 +2403,34 @@ function Get-DocsInlineItems
 		$End = -1
 
 		# Inline: [text](destination "title")
-		if ($Next -lt $Length -and $Masked[$Next] -eq '(')
+		if ($Next -lt $Length -and $Text[$Next] -eq '(')
 		{
 			$P = $Next + 1
-			while ($P -lt $Length -and [char]::IsWhiteSpace($Masked[$P])) { $P++ }
+			while ($P -lt $Length -and [char]::IsWhiteSpace($Text[$P])) { $P++ }
 			$From = $P
 			$To = $P
 			$Ok = $true
-			if ($P -lt $Length -and $Masked[$P] -eq '<')
+			if ($P -lt $Length -and $Text[$P] -eq '<')
 			{
-				$Gt = [Array]::IndexOf($Masked, [char]'>', $P)
-				$Newline = [Array]::IndexOf($Masked, [char]"`n", $P)
-				if ($Gt -lt 0 -or ($Newline -ge 0 -and $Newline -lt $Gt)) { $Ok = $false }
-				else { $From = $P + 1; $To = $Gt; $P = $Gt + 1 }
+				# <destination>: on one line, with < and > only escaped.
+				$Ok = $false
+				$Q = $P + 1
+				while ($Q -lt $Length)
+				{
+					if ($Text[$Q] -eq '\' -and (& $Escapes $Q)) { $Q += 2; continue }
+					if ($Text[$Q] -eq "`n" -or $Text[$Q] -eq '<') { break }
+					if ($Text[$Q] -eq '>') { $Ok = $true; break }
+					$Q++
+				}
+				if ($Ok) { $From = $P + 1; $To = $Q; $P = $Q + 1 }
 			}
 			else
 			{
 				$Parens = 0
 				while ($P -lt $Length)
 				{
-					$C = $Masked[$P]
+					if ($Text[$P] -eq '\' -and (& $Escapes $P)) { $P += 2; continue }
+					$C = $Text[$P]
 					if ([char]::IsWhiteSpace($C)) { break }
 					if ($C -eq '(') { $Parens++ }
 					elseif ($C -eq ')')
@@ -2377,16 +2442,23 @@ function Get-DocsInlineItems
 				}
 				$To = $P
 			}
-			while ($P -lt $Length -and [char]::IsWhiteSpace($Masked[$P])) { $P++ }
-			if ($Ok -and $P -lt $Length -and ($Masked[$P] -eq '"' -or $Masked[$P] -eq "'" -or $Masked[$P] -eq '('))
+			while ($P -lt $Length -and [char]::IsWhiteSpace($Text[$P])) { $P++ }
+			if ($Ok -and $P -lt $Length -and ($Text[$P] -eq '"' -or $Text[$P] -eq "'" -or $Text[$P] -eq '('))
 			{
-				$Closer = $Masked[$P]
+				$Closer = $Text[$P]
 				if ($Closer -eq '(') { $Closer = [char]')' }
-				$TitleEnd = [Array]::IndexOf($Masked, [char]$Closer, $P + 1)
-				if ($TitleEnd -lt 0) { $Ok = $false } else { $P = $TitleEnd + 1 }
-				while ($P -lt $Length -and [char]::IsWhiteSpace($Masked[$P])) { $P++ }
+				$Ok = $false
+				$Q = $P + 1
+				while ($Q -lt $Length)
+				{
+					if ($Text[$Q] -eq '\' -and (& $Escapes $Q)) { $Q += 2; continue }
+					if ($Text[$Q] -eq $Closer) { $Ok = $true; break }
+					$Q++
+				}
+				$P = $Q + 1
+				while ($P -lt $Length -and [char]::IsWhiteSpace($Text[$P])) { $P++ }
 			}
-			if ($Ok -and $P -lt $Length -and $Masked[$P] -eq ')')
+			if ($Ok -and $P -lt $Length -and $Text[$P] -eq ')')
 			{
 				$Destination = ConvertFrom-MarkdownDestination $Text.Substring($From, $To - $From)
 				& $Add $Kind $Destination $Opener.At
@@ -2400,9 +2472,18 @@ function Get-DocsInlineItems
 		{
 			$Label = $Text.Substring($Opener.At + 1, $Index - $Opener.At - 1)
 			$After = $Next
-			if ($Next -lt $Length -and $Masked[$Next] -eq '[')
+			if ($Next -lt $Length -and $Text[$Next] -eq '[')
 			{
-				$LabelEnd = [Array]::IndexOf($Masked, [char]']', $Next)
+				# The label ends at the first ] that is not escaped, and holds no [.
+				$LabelEnd = -1
+				$Q = $Next + 1
+				while ($Q -lt $Length)
+				{
+					if ($Text[$Q] -eq '\' -and (& $Escapes $Q)) { $Q += 2; continue }
+					if ($Text[$Q] -eq ']') { $LabelEnd = $Q; break }
+					if ($Text[$Q] -eq '[') { break }
+					$Q++
+				}
 				if ($LabelEnd -gt $Next + 1) { $Label = $Text.Substring($Next + 1, $LabelEnd - $Next - 1) }
 				if ($LabelEnd -gt $Next) { $After = $LabelEnd + 1 }
 			}
@@ -2414,7 +2495,12 @@ function Get-DocsInlineItems
 		}
 
 		if ($End -lt 0) { $Index++; continue }
-		if (-not $Opener.Image) { foreach ($Earlier in $Openers) { $Earlier.Active = $false } }
+		# A link inside a link is not one, so a link makes each [ before it inactive. A ![ stays
+		# active: an image's alt text may hold a link.
+		if (-not $Opener.Image)
+		{
+			foreach ($Earlier in $Openers) { if (-not $Earlier.Image) { $Earlier.Active = $false } }
+		}
 		$Index = $End
 	}
 
@@ -2474,13 +2560,51 @@ function Get-HtmlBlockEnd([string]$Body, [bool]$InParagraph)
 
 <#
 .SYNOPSIS
+The cells of a GFM table row. Each | that is not escaped splits it, even inside backticks; one at
+the start or end of the row only bounds a cell.
+#>
+function Split-MarkdownTableRow([string]$Row)
+{
+	$Text = $Row.Trim()
+	$Cells = New-Object System.Collections.Generic.List[string]
+	$Start = 0
+	for ($K = 0; $K -lt $Text.Length; ++$K)
+	{
+		if ($Text[$K] -eq '\') { $K++; continue }
+		if ($Text[$K] -ne '|') { continue }
+		$Cells.Add($Text.Substring($Start, $K - $Start))
+		$Start = $K + 1
+	}
+	$Cells.Add($Text.Substring($Start))
+	if ($Text.StartsWith('|')) { $Cells.RemoveAt(0) }
+	# Nothing after the last |: the row ends with one.
+	if ($Cells.Count -gt 0 -and $Start -eq $Text.Length) { $Cells.RemoveAt($Cells.Count - 1) }
+	return ,$Cells.ToArray()
+}
+
+<#
+.SYNOPSIS
+How many columns a GFM delimiter row such as | --- | :-: | gives a table, or 0 when the line is not
+one. Dashes with no | or : are a setext underline or a thematic break instead.
+#>
+function Get-MarkdownTableColumns([string]$Line)
+{
+	if ($Line.IndexOf('|') -lt 0 -and $Line.IndexOf(':') -lt 0) { return 0 }
+	$Cells = Split-MarkdownTableRow $Line
+	foreach ($Cell in $Cells) { if ($Cell -notmatch '^[ \t]*:?-+:?[ \t]*\z') { return 0 } }
+	return $Cells.Count
+}
+
+<#
+.SYNOPSIS
 Check one page of a docs bundle against the contract's Markdown rules.
 
 .DESCRIPTION
 Reads the blocks the way CommonMark does: quotes, list items and footnotes hold other blocks, a
 paragraph carries on lazily past the end of its container, and fenced code ends at a closing fence
-indented at most three spaces in its container. Then each paragraph's links, images and raw HTML,
-once every reference definition is known. The website parses each page with a full CommonMark
+indented at most three spaces in its container. A GFM table runs from its header row to a blank
+line or another block, and a --- or === in it is never an underline. Then the links, images and raw
+HTML of each paragraph and table cell, once every reference definition is known. The website parses each page with a full CommonMark
 parser when it builds and checks the rules again.
 
 .PARAMETER Path
@@ -2509,8 +2633,10 @@ function Test-DocsMarkdown
 	# The open containers, outermost first: a quote, or a list item or footnote with the indent its
 	# content needs.
 	$Open = New-Object System.Collections.Generic.List[object]
-	# The open leaf: '' for none, para, fence or html. End is what ends an HTML block.
+	# The open leaf: '' for none, para, table, fence or html. End is what ends an HTML block.
 	$Leaf = @{ Kind = ''; Fence = ''; End = '' }
+	# The paragraph's lines: Line, Text, the Indent before it, and Lazy when it carries on past its
+	# container.
 	$Para = New-Object System.Collections.Generic.List[object]
 
 	$CloseLeaf = {
@@ -2522,6 +2648,11 @@ function Test-DocsMarkdown
 		}
 		$Para.Clear()
 		$Leaf.Kind = ''
+	}
+	# Each cell of a table row is read on its own, as the site renders it.
+	$AddRow = {
+		param([int]$Line, [string]$Row)
+		foreach ($Cell in (Split-MarkdownTableRow $Row)) { $Spans.Add(@([pscustomobject]@{ Line = $Line; Text = $Cell })) }
 	}
 	$AtxPattern = '^(#{1,6})(?:[ \t](.*))?$'
 	$BreakPattern = '^([-*_])([ \t]*\1){2,}[ \t]*$'
@@ -2635,7 +2766,7 @@ function Test-DocsMarkdown
 		# A lazy line: it carries on the paragraph even though its containers have ended.
 		if (-not $AllMatched -and $New.Count -eq 0 -and $Leaf.Kind -eq 'para' -and -not $Blank -and ($Indent -ge 4 -or -not (& $Interrupts $Body)))
 		{
-			$Para.Add([pscustomobject]@{ Line = $Number; Text = $Body })
+			$Para.Add([pscustomobject]@{ Line = $Number; Text = $Body; Indent = $Indent; Lazy = $true })
 			continue
 		}
 		if (-not $AllMatched)
@@ -2655,8 +2786,38 @@ function Test-DocsMarkdown
 		}
 		$Nested = ($Open.Count -gt 0)
 
+		if ($Leaf.Kind -eq 'table')
+		{
+			if ($Indent -lt 4 -and -not (& $Interrupts $Body))
+			{
+				& $AddRow $Number $Body
+				continue
+			}
+			& $CloseLeaf
+		}
+
 		if ($Leaf.Kind -eq 'para')
 		{
+			# A delimiter row makes the paragraph's last line a table's header row, when both have
+			# as many cells. That line cannot carry on past its container, be indented code or
+			# start a reference definition.
+			$Header = $Para[$Para.Count - 1]
+			$Columns = 0
+			if ($Indent -lt 4 -and -not $Header.Lazy -and $Header.Indent -lt 4) { $Columns = Get-MarkdownTableColumns $Body }
+			if ($Columns -gt 0 -and (Split-MarkdownTableRow $Header.Text).Count -eq $Columns)
+			{
+				$Before = @($Para.ToArray() | Select-Object -First ($Para.Count - 1))
+				$IsDefinition = ((Split-MarkdownDefinitions $Before).Rest.Count -eq 0 -and (Split-MarkdownDefinitions @($Header)).Definitions.Count -gt 0)
+				if (-not $IsDefinition)
+				{
+					$Para.RemoveAt($Para.Count - 1)
+					& $CloseLeaf
+					$Leaf.Kind = 'table'
+					& $AddRow $Header.Line $Header.Text
+					continue
+				}
+			}
+
 			# Underlined with = or -, the paragraph is an H1 or H2, unless it was all definitions.
 			if ($Indent -lt 4 -and $Body -match '^(?:=+|-+)[ \t]*$')
 			{
@@ -2675,7 +2836,7 @@ function Test-DocsMarkdown
 			}
 			elseif ($Indent -ge 4 -or -not (& $Interrupts $Body))
 			{
-				$Para.Add([pscustomobject]@{ Line = $Number; Text = $Body })
+				$Para.Add([pscustomobject]@{ Line = $Number; Text = $Body; Indent = $Indent; Lazy = $false })
 				continue
 			}
 			else { & $CloseLeaf }
@@ -2718,7 +2879,7 @@ function Test-DocsMarkdown
 		}
 
 		$Leaf.Kind = 'para'
-		$Para.Add([pscustomobject]@{ Line = $Number; Text = $Body })
+		$Para.Add([pscustomobject]@{ Line = $Number; Text = $Body; Indent = $Indent; Lazy = $false })
 	}
 	& $CloseLeaf
 
@@ -2781,12 +2942,68 @@ function Test-DocsMarkdown
 
 <#
 .SYNOPSIS
+Whether the docs site can read an SVG's size from its <svg> tag, as Astro's image-size does: a
+width and a height, or a viewBox, which can stand in for either.
+#>
+function Test-SvgSize([string]$Tag)
+{
+	$Length = '^[0-9.]+(?:e[0-9]+)?(?:in|cm|em|ex|m|mm|pc|pt|px)?\z'
+	$Width = [regex]::Match($Tag, '\swidth=([''"])([^%]+?)\1')
+	$Height = [regex]::Match($Tag, '\sheight=([''"])([^%]+?)\1')
+	$HasWidth = ($Width.Success -and $Width.Groups[2].Value -cmatch $Length)
+	$HasHeight = ($Height.Success -and $Height.Groups[2].Value -cmatch $Length)
+	if ($HasWidth -and $HasHeight) { return $true }
+	$ViewBox = [regex]::Match($Tag, '\sviewBox=([''"])(.+?)\1', [Text.RegularExpressions.RegexOptions]'IgnoreCase, CultureInvariant')
+	if (-not $ViewBox.Success) { return $false }
+	if ($HasWidth -or $HasHeight) { return $true }
+	$Bounds = $ViewBox.Groups[2].Value.Split(' ')
+	return ($Bounds.Count -ge 4 -and $Bounds[2] -cmatch $Length -and $Bounds[3] -cmatch $Length)
+}
+
+<#
+.SYNOPSIS
+Why the docs site cannot read an image, or nothing. Its build reads the size of each image a page
+shows and stops on one it cannot read. A raster image may be any of the four formats, whatever its
+extension, as the site does not mind.
+#>
+function Get-DocsImageProblem([string]$Path)
+{
+	$Bytes = [IO.File]::ReadAllBytes($Path)
+	# Latin-1 maps each byte to one character, so the patterns below match bytes.
+	$Head = [Text.Encoding]::GetEncoding(28591).GetString($Bytes, 0, [Math]::Min($Bytes.Length, 64))
+	if ($Head.StartsWith('version https://git-lfs.github.com/spec/', [StringComparison]::Ordinal))
+	{
+		return 'This is a Git LFS pointer, not the image: CI checks out without LFS. Commit the image to git itself.'
+	}
+	if (-not (Test-SameName ([IO.Path]::GetExtension($Path)) '.svg' -IgnoreCase))
+	{
+		if ($Head -cmatch '^(?:\x89PNG\r\n\x1A\n[\x00-\xFF]{4}(?:IHDR|CgBI)|\xFF\xD8|GIF8[79]a|RIFF[\x00-\xFF]{4}WEBPVP8)') { return $null }
+		return 'The docs site cannot read this image: it is not a PNG, JPEG, GIF or WebP file.'
+	}
+
+	if (Test-Utf16Bom $Bytes) { return 'The SVG is saved as UTF-16, which the docs site cannot read. Save it as UTF-8.' }
+	# The site looks for the tag in the first 1000 bytes, then reads the first one in the file.
+	$Root = '<svg\s(?:[^>"'']|"[^"]*"|''[^'']*'')*>'
+	if (-not [regex]::IsMatch($script:Utf8NoBom.GetString($Bytes, 0, [Math]::Min($Bytes.Length, 1000)), $Root))
+	{
+		return 'The docs site cannot read this SVG: there is no <svg ...> tag in its first 1000 bytes.'
+	}
+	if (-not (Test-SvgSize ([regex]::Match($script:Utf8NoBom.GetString($Bytes), $Root).Value)))
+	{
+		return 'The docs site cannot read the size of this SVG. Give its <svg> tag a viewBox, or a width and a height.'
+	}
+	return $null
+}
+
+<#
+.SYNOPSIS
 Check a docs bundle against every file and Markdown rule of the contract, and its docs.json.
 
 .DESCRIPTION
-Also checks what the site's build rejects beyond the contract: pages that are not UTF-8, URLs in
-docs.json that are not http(s), and page names that give no URL, a URL kept for versions, or the
-URL of another page. Any of these would stop the site deploying every product.
+Also checks what the site's build rejects beyond the contract: pages that are not UTF-8, images it
+cannot read, docs.json values of the wrong type, URLs in docs.json that are not http(s), and page
+names that give no URL, a URL kept for versions, or the URL of another page. Any of these would stop
+the site deploying every product.
 
 Each problem is an annotation on the plugin's own file (Content/Docs/...) and, for Markdown, its
 line. With -AsWarnings they are reported as warnings, for runs that do not publish.
@@ -2817,9 +3034,10 @@ function Test-DocsBundle
 		& $Fail "Not a docs bundle: $($_.Exception.Message)"
 		return [pscustomobject]$State
 	}
-	# Keys in their exact case, as the site reads JSON.
-	$Has = { param([string]$Key) @($Manifest.PSObject.Properties | Where-Object { $_.Name -ceq $Key }).Count -gt 0 }
-	$Value = { param([string]$Key) @($Manifest.PSObject.Properties | Where-Object { $_.Name -ceq $Key } | ForEach-Object { $_.Value })[0] }
+	# Keys in their exact case and values of their exact type, as the site reads JSON: -eq would
+	# take "1" or true for 1, and [string] would turn a number or a list into text.
+	$Has = { param([string]$Key) (Get-JsonMember $Manifest $Key).Has }
+	$Value = { param([string]$Key) return ,(Get-JsonMember $Manifest $Key).Value }
 	$Base = [string](& $Value 'base')
 	if (-not $Base) { $Base = $script:DocsBase }
 
@@ -2829,24 +3047,32 @@ function Test-DocsBundle
 	{
 		if (-not (& $Has $Key)) { & $Fail "docs.json has no `"$Key`"." }
 	}
-	if ((& $Value 'schema') -ne 1) { & $Fail 'docs.json: "schema" must be 1.' }
+	$Schema = & $Value 'schema'
+	$IsNumber = ($Schema -is [int] -or $Schema -is [long] -or $Schema -is [decimal] -or $Schema -is [double])
+	if (-not ($IsNumber -and $Schema -eq 1)) { & $Fail 'docs.json: "schema" must be 1.' }
 
-	$Section = [string](& $Value 'section')
-	if ($script:DocsSections -cnotcontains $Section) { & $Fail "docs.json: section '$Section' is not one the docs site knows: $($script:DocsSections -join ', ')." }
-	$Slug = [string](& $Value 'slug')
-	if ($Slug -cnotmatch '^[a-z0-9]+(-[a-z0-9]+)*$') { & $Fail "docs.json: slug '$Slug' must be lowercase kebab-case." }
+	$Section = & $Value 'section'
+	if (-not ($Section -is [string] -and (Test-NameIn $Section $script:DocsSections))) { & $Fail "docs.json: section '$Section' is not one the docs site knows: $($script:DocsSections -join ', ')." }
+	$Slug = & $Value 'slug'
+	if (-not ($Slug -is [string] -and $Slug -cmatch $script:DocsSlugPattern)) { & $Fail "docs.json: slug '$Slug' must be lowercase kebab-case." }
 
 	$Hints = @{ name = ' Set FriendlyName in the .uplugin.'; description = ' Set Description in the .uplugin; the docs site shows it on cards.' }
 	foreach ($Key in @('name', 'description', 'landing', 'ref', 'base'))
 	{
-		if ((& $Has $Key) -and -not ([string](& $Value $Key)).Trim()) { & $Fail "docs.json: `"$Key`" is empty.$($Hints[$Key])" }
+		if (-not (& $Has $Key)) { continue }
+		$Text = & $Value $Key
+		if ($Text -isnot [string]) { & $Fail "docs.json: `"$Key`" must be a string." }
+		elseif (-not $Text.Trim()) { & $Fail "docs.json: `"$Key`" is empty.$($Hints[$Key])" }
 	}
 
 	$Released = & $Value 'released'
+	# PowerShell 7 reads a date in JSON as a DateTime.
 	if ($Released -is [DateTime]) { $Released = $Released.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) }
-	if ([string]$Released -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { & $Fail 'docs.json: "released" must be a date, YYYY-MM-DD.' }
-	if ([string](& $Value 'commit') -cnotmatch '^[0-9a-f]{40}$') { & $Fail 'docs.json: "commit" must be a full 40-character SHA.' }
-	if ([string](& $Value 'repo') -notmatch '^[\w.-]+/[\w.-]+$') { & $Fail 'docs.json: "repo" must be owner/name.' }
+	if (-not ($Released -is [string] -and $Released -cmatch $script:DocsDatePattern)) { & $Fail 'docs.json: "released" must be a date, YYYY-MM-DD.' }
+	$Commit = & $Value 'commit'
+	if (-not ($Commit -is [string] -and $Commit -cmatch $script:DocsCommitPattern)) { & $Fail 'docs.json: "commit" must be a full 40-character SHA.' }
+	$Repo = & $Value 'repo'
+	if (-not ($Repo -is [string] -and $Repo -cmatch $script:DocsRepoPattern)) { & $Fail 'docs.json: "repo" must be owner/name.' }
 	foreach ($Key in @('preview', 'private'))
 	{
 		if ((& $Has $Key) -and (& $Value $Key) -isnot [bool]) { & $Fail "docs.json: `"$Key`" must be true or false." }
@@ -2857,11 +3083,24 @@ function Test-DocsBundle
 		if ($null -ne $Url -and -not ($Url -is [string] -and $Url -cmatch $script:DocsUrlPattern)) { & $Fail "docs.json: `"$Key`" must be an http(s) URL or null." }
 	}
 	$Glyph = & $Value 'glyph'
-	if ($null -ne $Glyph -and -not ($Glyph -is [string] -and $Glyph -cmatch '^[A-Za-z]{1,2}$')) { & $Fail 'docs.json: "glyph" must be one or two letters.' }
+	if ($null -ne $Glyph -and -not ($Glyph -is [string] -and $Glyph -cmatch '^[A-Za-z]{1,2}\z')) { & $Fail 'docs.json: "glyph" must be one or two letters.' }
+	# The site reads unreal only when it is there, and each of its lists only when that is there.
+	$Unreal = & $Value 'unreal'
+	$Engines = Get-JsonMember $Unreal 'engines'
+	if ($Engines.Has -and -not ($Engines.Value -is [Array] -and @($Engines.Value | Where-Object { $_ -isnot [string] }).Count -eq 0))
+	{
+		& $Fail 'docs.json: "unreal.engines" must be a list of versions as strings, such as "5.8".'
+	}
+	$Modules = Get-JsonMember $Unreal 'modules'
+	if ($Modules.Has -and -not ($Modules.Value -is [Array] -and @($Modules.Value | Where-Object { -not ((Get-JsonMember $_ 'name').Value -is [string] -and (Get-JsonMember $_ 'type').Value -is [string]) }).Count -eq 0))
+	{
+		& $Fail 'docs.json: "unreal.modules" must be a list of { "name", "type" }, both strings.'
+	}
 
 	$Version = & $Value 'version'
+	$Preview = & $Value 'preview'
 	$Folder = 'preview'
-	if ((& $Value 'preview') -eq $true)
+	if ($Preview -is [bool] -and $Preview)
 	{
 		if ($null -ne $Version) { & $Fail 'docs.json: a preview has "version": null.' }
 	}
@@ -2873,11 +3112,11 @@ function Test-DocsBundle
 	else
 	{
 		$Folder = [string]$Version
-		if (-not (Test-DocsVersion $Folder)) { & $Fail "docs.json: version '$Folder' is not a release version such as 1.0.1." }
+		if (-not (Test-DocsVersion $Version)) { & $Fail "docs.json: version '$Folder' is not a release version such as 1.0.1." }
 	}
 	$Expected = "$Section/$Slug/$Folder"
 	$Actual = @($Root.Replace('\', '/').Split('/') | Select-Object -Last 3) -join '/'
-	if ($Actual -cne $Expected) { & $Fail "The bundle is in .../$Actual, but its docs.json puts it in $Expected." }
+	if (-not (Test-SameName $Actual $Expected)) { & $Fail "The bundle is in .../$Actual, but its docs.json puts it in $Expected." }
 
 	# Files -----------------------------------------------------------------------------------
 
@@ -2890,15 +3129,15 @@ function Test-DocsBundle
 		$Full = Join-Paths $Root $File
 		$Size = (New-Object IO.FileInfo $Full).Length
 		$Total += $Size
-		if ($File -ceq 'docs.json') { continue }
+		if (Test-SameName $File 'docs.json') { continue }
 
 		$Shown = "$Base/$File"
 		$Extension = [IO.Path]::GetExtension($File)
-		$IsImage = $script:DocsImageTypes -contains $Extension.ToLowerInvariant()
-		if ($Extension -ceq '.md') { $Pages.Add($File) }
-		elseif ($Extension -eq '.md')
+		$IsImage = Test-NameIn $Extension.ToLowerInvariant() $script:DocsImageTypes
+		if (Test-SameName $Extension '.md') { $Pages.Add($File) }
+		elseif (Test-SameName $Extension '.md' -IgnoreCase)
 		{
-			& $Fail 'A page must end in .md, in lowercase: the docs site leaves anything else out. Rename it.' $Shown
+			& $Fail 'A page must end in .md, in lowercase; the docs site rejects anything else. Rename it.' $Shown
 			continue
 		}
 		elseif (-not $IsImage)
@@ -2910,7 +3149,12 @@ function Test-DocsBundle
 		{
 			& $Fail ([string]::Format($Invariant, 'The image is over the 5 MB limit ({0:N0} bytes).', $Size)) $Shown
 		}
-		if ($script:DocsTextTypes -contains $Extension -and [Array]::IndexOf([IO.File]::ReadAllBytes($Full), [byte]13) -ge 0)
+		if ($IsImage)
+		{
+			$Problem = Get-DocsImageProblem $Full
+			if ($Problem) { & $Fail $Problem $Shown }
+		}
+		if ((Test-NameIn $Extension.ToLowerInvariant() $script:DocsTextTypes) -and [Array]::IndexOf([IO.File]::ReadAllBytes($Full), [byte]13) -ge 0)
 		{
 			& $Fail 'CR line endings. A bundle uses LF.' $Shown
 		}
@@ -2920,12 +3164,13 @@ function Test-DocsBundle
 		& $Fail ([string]::Format($Invariant, 'The docs are over the 25 MB limit ({0:N0} bytes). Shrink or drop images.', $Total))
 	}
 
-	$Landing = [string](& $Value 'landing')
+	$Landing = & $Value 'landing'
+	if ($Landing -isnot [string]) { $Landing = '' }
 	if ($Landing)
 	{
 		$Found = Find-DocsFile $Root $Landing
-		if (-not $Found) { & $Fail "The landing page $Base/$Landing is missing. It is the product's front page on the docs site." }
-		elseif ($Found -cne $Landing) { & $Fail "The landing page must be named $Landing, with that case." "$Base/$Found" }
+		if (-not $Found -or -not [IO.File]::Exists((Join-Paths $Root $Found))) { & $Fail "The landing page $Base/$Landing is missing. It is the product's front page on the docs site." }
+		elseif (-not (Test-SameName $Found $Landing)) { & $Fail "The landing page must be named $Landing, with that case." "$Base/$Found" }
 	}
 
 	# Each page gets a URL of its own, outside the ones kept for versions.
@@ -2987,10 +3232,10 @@ Commit a docs bundle into a docs-content checkout and push it.
 
 .DESCRIPTION
 Replaces <section>/<slug>/<version>/ with a release's bundle and commits that folder alone, as
-"<Name> <version> docs". The bundle must pass Read-DocsRelease: CI pushes releases only. When the
-push is rejected because the branch moved on, it fetches, rebases and tries again, three tries in
-all, as the contract says; any other failure stops at once. When the folder already holds the
-bundle, as on a re-run, nothing is committed.
+"<Name> <version> docs". Nothing else may be staged in the checkout. The bundle must pass
+Read-DocsRelease: CI pushes releases only. When the push is rejected because the branch moved on,
+it fetches, rebases and tries again, three tries in all, as the contract says; any other failure
+stops at once. When the folder already holds the bundle, as on a re-run, nothing is committed.
 
 .OUTPUTS
 Folder, Changed, and Commit, the commit the branch is at.
@@ -3005,6 +3250,8 @@ function Publish-DocsBundle
 		[int]$Tries = 3
 	)
 
+	$BundleDir = Get-FullPath $BundleDir
+	$ContentDir = Get-FullPath $ContentDir
 	$Manifest = Read-DocsRelease $BundleDir
 	$Folder = Get-DocsBundleFolder $Manifest
 	$Identity = @('-c', 'user.name=github-actions[bot]', '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com')
@@ -3012,6 +3259,12 @@ function Publish-DocsBundle
 		param([string]$What, [string[]]$Arguments)
 		$Exit = Invoke-NativeCommand -FilePath 'git' -ArgumentList (@('-C', $ContentDir) + $Identity + $Arguments)
 		if ($Exit -ne 0) { throw "$What failed in $ContentDir (git exit code $Exit)." }
+	}
+
+	# The commit takes the whole index, so nothing else may be in it.
+	if ((Invoke-NativeQuiet git @('-C', $ContentDir, 'diff', '--cached', '--quiet', '--', '.', ":(exclude)$Folder")).ExitCode -eq 1)
+	{
+		throw "$ContentDir has changes staged outside $Folder. Commit or unstage them first."
 	}
 
 	$Target = Join-Paths $ContentDir $Folder
@@ -3023,6 +3276,10 @@ function Publish-DocsBundle
 		[IO.File]::Copy((Join-Paths $BundleDir $File), $To, $true)
 	}
 
+	# With core.ignorecase, as in a clone on Windows, git keeps the old case of a renamed file. So
+	# the folder is unstaged before it is staged, and the commit is not limited to it: that would
+	# stage the old name again.
+	& $Git 'Unstaging the old docs' @('rm', '-r', '-q', '--cached', '--ignore-unmatch', '--', $Folder)
 	& $Git 'Staging the docs' @('add', '-A', '--', $Folder)
 	$Result = [pscustomobject]@{ Folder = $Folder; Changed = $false; Commit = $null }
 	if ((Invoke-NativeQuiet git @('-C', $ContentDir, 'diff', '--cached', '--quiet', '--', $Folder)).ExitCode -eq 0)
@@ -3031,7 +3288,7 @@ function Publish-DocsBundle
 		return $Result
 	}
 
-	& $Git 'Committing the docs' @('commit', '-q', '-m', "$($Manifest.name) $($Manifest.version) docs", '--', $Folder)
+	& $Git 'Committing the docs' @('commit', '-q', '-m', "$($Manifest.name) $($Manifest.version) docs")
 
 	for ($Try = 1; $Try -le $Tries; ++$Try)
 	{
