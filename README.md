@@ -87,18 +87,20 @@ With `publish-docs`, each release also publishes the plugin's `Content/Docs` to
 ```
 
 The release builds a docs bundle from the released commit and checks it before publishing
-anything. It attaches the bundle as `<Repo>-<version>-docs.zip` with a `.sha256`, then pushes it to
-`KhaosSystems/docs-content`, which deploys the site. That repository's README is the contract.
+anything. It attaches the bundle as `<Repo>-<version>-docs.zip` with a `.sha256`. Then the `docs`
+job pushes it to `KhaosSystems/docs-content`, which deploys the site. That repository's README is
+the contract.
 
 `KHAOS_DOCS_TOKEN` is an organization secret: a fine-grained token owned by KhaosSystems, with
 *Contents* read and write on `KhaosSystems/docs-content` and *Actions* read and write on
-`KhaosSystems/website`. Only the push step sees it. Without it, a release fails before the build.
+`KhaosSystems/website`. Create it before any plugin opts in. Two steps see it: the push, and on a
+release the token check before the build. A release whose token is missing or expired fails there.
 
 Every run checks the docs against the contract's rules: errors with `publish-docs`, warnings
 without.
 
-If the push fails after the release is made, re-run the failed jobs. The bundle is rebuilt with
-the release's date, and the push replaces only that version's folder.
+If the push fails, re-run the failed jobs. Only the `docs` job runs again: it pushes the same
+bundle, leaves the release alone and replaces only that version's folder.
 
 To preview docs on the site, build a bundle from a checkout into the website's bundles folder:
 

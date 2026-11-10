@@ -4,13 +4,16 @@ Push a docs bundle to KhaosSystems/docs-content, which docs.khaos.systems is bui
 
 .DESCRIPTION
 Replaces a release bundle's own <section>/<slug>/<version>/ folder and nothing else, in one commit
-named "<Name> <version> docs". A push that loses a race with another product's is rebased and tried
+named "<Name> <version> docs". The bundle is checked first, and refused unless it is a release
+that passes every rule. A push that loses a race with another product's is rebased and tried
 again, three tries in all. When the folder already holds this bundle, as on a re-run, nothing is
-pushed. A push to docs-content's main branch starts the site's deploy. A preview is refused: CI
-pushes releases only.
+pushed. A push to docs-content's main branch starts the site's deploy.
 
 Only the bundle's folder is checked out, and file contents are fetched as needed, so the clone stays
 small however many versions the repository holds.
+
+With -CheckToken it pushes nothing: it only checks that the token can read the docs repository, so
+a release with an expired token fails before it is made.
 
 Needs DOCS_TOKEN: a token with Contents read and write on the docs repository, the organization
 secret KHAOS_DOCS_TOKEN.
@@ -21,14 +24,17 @@ secret KHAOS_DOCS_TOKEN.
 [CmdletBinding()]
 param(
 	# The bundle's version folder, from New-DocsBundle.ps1.
-	[Parameter(Mandatory)][string]$BundleDir,
+	[string]$BundleDir,
 
 	[string]$Repository = 'KhaosSystems/docs-content',
 	[string]$Branch = 'main',
 	[string]$WorkDir = (Join-Path ([IO.Path]::GetTempPath()) 'publish-docs'),
 
 	# Where to push instead of GitHub, such as a local repository in tests.
-	[string]$RemoteUrl
+	[string]$RemoteUrl,
+
+	# Only check that the token can read the docs repository.
+	[switch]$CheckToken
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,11 +46,14 @@ function Invoke-Git
 	if ($ExitCode -ne 0) { throw "git $($args -join ' ') failed with exit code $ExitCode." }
 }
 
-$BundleDir = (Get-FullPath $BundleDir).TrimEnd('\', '/')
+if (-not $CheckToken)
+{
+	if (-not $BundleDir) { throw 'Give the bundle with -BundleDir.' }
+	$BundleDir = (Get-FullPath $BundleDir).TrimEnd('\', '/')
+	$Manifest = Read-DocsRelease $BundleDir
+	$Folder = Get-DocsBundleFolder $Manifest
+}
 $WorkDir = Get-FullPath $WorkDir
-$Manifest = Read-DocsManifest $BundleDir
-if ($Manifest.preview) { throw "$BundleDir is a preview. Only releases are pushed; build the bundle with -Tag." }
-$Folder = Get-DocsBundleFolder $Manifest
 $Where = $Repository
 if ($RemoteUrl) { $Where = $RemoteUrl }
 
@@ -67,17 +76,36 @@ try
 	}
 	$env:GIT_TERMINAL_PROMPT = '0'
 
-	Reset-Directory $WorkDir
-	$Clone = Join-Paths $WorkDir 'docs-content'
-	Invoke-Git clone --filter=blob:none --sparse --no-checkout --quiet --branch $Branch $RemoteUrl $Clone
-	Invoke-Git -C $Clone sparse-checkout set '--' $Folder
-	Invoke-Git -C $Clone checkout --quiet $Branch
+	if ($CheckToken)
+	{
+		$Probe = Invoke-NativeQuiet git @('ls-remote', '--heads', $RemoteUrl, $Branch)
+		if ($Probe.ExitCode -ne 0 -or $Probe.Output.Count -eq 0)
+		{
+			$Message = "docs-token cannot read $Branch of $Where. It may have expired: renew the organization secret KHAOS_DOCS_TOKEN."
+			Write-CiAnnotation error $Message -Title 'Docs token'
+			throw $Message
+		}
+	}
+	else
+	{
+		Reset-Directory $WorkDir
+		$Clone = Join-Paths $WorkDir 'docs-content'
+		Invoke-Git clone --filter=blob:none --sparse --no-checkout --quiet --branch $Branch $RemoteUrl $Clone
+		Invoke-Git -C $Clone sparse-checkout set '--' $Folder
+		Invoke-Git -C $Clone checkout --quiet $Branch
 
-	$Result = Publish-DocsBundle -BundleDir $BundleDir -ContentDir $Clone -Branch $Branch
+		$Result = Publish-DocsBundle -BundleDir $BundleDir -ContentDir $Clone -Branch $Branch
+	}
 }
 finally
 {
 	foreach ($Name in $GitVariables) { [Environment]::SetEnvironmentVariable($Name, $Saved[$Name]) }
+}
+
+if ($CheckToken)
+{
+	Write-Host "docs-token can read $Branch of $Where."
+	return
 }
 
 $Version = [string]$Manifest.version

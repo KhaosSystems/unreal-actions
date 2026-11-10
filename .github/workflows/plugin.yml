@@ -7,8 +7,8 @@
 #   build    Build machine. BuildPlugin on that zip, then the automation tests on the result.
 #   release  Once every engine passed, for a run with release set (the next version comes from the
 #            commit messages) or a pushed vX.Y.Z tag: GitHub release and tag, release branch, Fab
-#            checklist. With publish-docs, also the docs: zipped onto the release, then pushed to
-#            docs.khaos.systems.
+#            checklist. With publish-docs, the docs bundle is zipped onto the release.
+#   docs     With publish-docs, after the release: pushes that bundle to docs.khaos.systems.
 #   badges   On the default branch of a public repository: tests, engines and lines of code.
 #   notify   Optional Discord message for releases and failures.
 #
@@ -145,9 +145,17 @@ jobs:
           RELEASE: ${{ steps.kind.outputs.release }}
         run: |
           if ($env:HAS_TOKEN -eq 'true') { exit 0 }
-          $Message = 'publish-docs is on, but docs-token is not set. In ci.yml, pass the organization secret KHAOS_DOCS_TOKEN as docs-token.'
+          $Message = 'docs-token is empty. Pass KHAOS_DOCS_TOKEN as docs-token in ci.yml, and check that the organization secret exists and this repository can use it.'
           if ($env:RELEASE -eq 'true') { Write-Host "::error title=No docs token::$Message"; exit 1 }
           Write-Host "::warning title=No docs token::$Message Releases fail without it."
+
+      # A release also checks that the token still works: it may have expired.
+      - name: Check docs token
+        if: inputs.publish-docs && steps.kind.outputs.release == 'true'
+        uses: KhaosSystems/unreal-actions/plugin/publish-docs@v1
+        with:
+          check-token: 'true'
+          token: ${{ secrets.docs-token }}
 
       - id: package
         uses: KhaosSystems/unreal-actions/plugin/package@v1
@@ -157,7 +165,9 @@ jobs:
           version: ${{ steps.kind.outputs.tag }}
 
       # Every run, so problems show long before a release: errors with publish-docs, else warnings.
+      # Without publish-docs it never fails the run, whatever goes wrong.
       - name: Check docs
+        continue-on-error: ${{ !inputs.publish-docs }}
         uses: KhaosSystems/unreal-actions/plugin/docs@v1
         with:
           plugin-dir: plugin
@@ -249,6 +259,7 @@ jobs:
       contents: write
     outputs:
       url: ${{ steps.release.outputs.url }}
+      docs-folder: ${{ steps.docs.outputs.folder }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -273,6 +284,16 @@ jobs:
           private: ${{ github.event.repository.private }}
           out-dir: docs-dist
 
+      # For the docs job: the bundle that goes on the release, so a re-run pushes the same bytes.
+      - name: Upload docs
+        if: inputs.publish-docs
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-bundle
+          path: docs-dist/
+          if-no-files-found: error
+          overwrite: true
+
       - id: release
         uses: KhaosSystems/unreal-actions/plugin/release@v1
         with:
@@ -282,14 +303,23 @@ jobs:
           target: ${{ github.sha }}
           docs-zip: ${{ steps.docs.outputs.zip }}
 
-      # Last, and the only step that sees the token. If it fails, the release already exists: re-run
-      # the failed jobs. The bundle is rebuilt with the release's date, the release is updated in
-      # place and the push replaces only this version's folder.
-      - name: Publish docs
-        if: inputs.publish-docs
-        uses: KhaosSystems/unreal-actions/plugin/publish-docs@v1
+  # Its own job, so a failed push leaves the release alone: re-run the failed jobs, and only this one
+  # runs again, pushing the bundle the release holds. It replaces only this version's folder.
+  docs:
+    name: Publish docs
+    needs: release
+    if: inputs.publish-docs
+    runs-on: windows-latest
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@v8
         with:
-          bundle-dir: ${{ steps.docs.outputs.bundle-dir }}
+          name: docs-bundle
+          path: docs-dist
+
+      - uses: KhaosSystems/unreal-actions/plugin/publish-docs@v1
+        with:
+          bundle-dir: docs-dist/${{ needs.release.outputs.docs-folder }}
           token: ${{ secrets.docs-token }}
 
   badges:
@@ -320,7 +350,7 @@ jobs:
 
   notify:
     name: Notify
-    needs: [package, build, release]
+    needs: [package, build, release, docs]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions: {}
@@ -333,6 +363,7 @@ jobs:
           RESULTS: ${{ needs.package.result }} ${{ needs.build.result }} ${{ needs.release.result }}
           RELEASE_RESULT: ${{ needs.release.result }}
           RELEASE_URL: ${{ needs.release.outputs.url }}
+          DOCS_RESULT: ${{ needs.docs.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REF: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
@@ -342,6 +373,10 @@ jobs:
             title="${PLUGIN} ${VERSION} is ready for Fab"
             description="Built and tested. Release: ${RELEASE_URL}
           The run summary has the links and version notes to paste into the Fab portal: ${RUN_URL}"
+            if [ "$DOCS_RESULT" = failure ]; then
+              description="${description}
+          Publishing the docs failed. Re-run the failed jobs; that leaves the release alone."
+            fi
             color=3066993
           elif [[ " $RESULTS " == *" failure "* ]]; then
             title="${PLUGIN:-$REPOSITORY} CI failed on ${REF}"

@@ -1680,16 +1680,18 @@ function ConvertTo-KebabCase([string]$Name)
 <#
 .SYNOPSIS
 The two letters a docs card shows: from the name's words, without a first word it shares with the
-maker. 'Khaos Palette' by Khaos Systems is PA, 'Khaos Folder Icons' FI.
+maker. 'Khaos Palette' by Khaos Systems is PA, 'Khaos Folder Icons' FI. Digits are skipped, as the
+site takes letters only: 'Khaos 3D Tools' is DT. Nothing when fewer than two letters are left.
 #>
 function Get-DocsGlyph([string]$Name, [string]$Maker)
 {
 	$Words = @((ConvertTo-KebabCase $Name).Split('-') | Where-Object { $_ })
 	$MakerWord = @((ConvertTo-KebabCase $Maker).Split('-') | Where-Object { $_ })[0]
 	if ($Words.Count -gt 1 -and $MakerWord -and $Words[0] -eq $MakerWord) { $Words = @($Words | Select-Object -Skip 1) }
-	if ($Words.Count -eq 0) { return $null }
+	$Words = @($Words | ForEach-Object { $_ -replace '[0-9]', '' } | Where-Object { $_ })
 	if ($Words.Count -gt 1) { $Glyph = $Words[0].Substring(0, 1) + $Words[1].Substring(0, 1) }
-	else { $Glyph = $Words[0].Substring(0, [math]::Min(2, $Words[0].Length)) }
+	elseif ($Words.Count -eq 1 -and $Words[0].Length -ge 2) { $Glyph = $Words[0].Substring(0, 2) }
+	else { return $null }
 	return $Glyph.ToUpperInvariant()
 }
 
@@ -1773,11 +1775,21 @@ function Read-DocsManifest([string]$BundleDir)
 	catch { throw "docs.json is not valid JSON: $($_.Exception.Message)" }
 }
 
-<# Where a bundle goes in docs-content: section/slug/version, or section/slug/preview. #>
+<# A release version as docs.json and the site write it: 1.0.1 or 1.1.0-rc.1, no v. #>
+function Test-DocsVersion($Version)
+{
+	return ($Version -is [string] -and $Version -cmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$')
+}
+
+<# Where a bundle goes in docs-content: section/slug/version, section/slug/preview, or section/slug/current for docs with no version. #>
 function Get-DocsBundleFolder($Manifest)
 {
 	$Folder = 'preview'
-	if (-not $Manifest.preview) { $Folder = [string]$Manifest.version }
+	if (-not $Manifest.preview)
+	{
+		$Folder = 'current'
+		if ($null -ne $Manifest.version) { $Folder = [string]$Manifest.version }
+	}
 	return "$($Manifest.section)/$($Manifest.slug)/$Folder"
 }
 
@@ -1840,11 +1852,13 @@ function New-DocsBundle
 
 	if ($Repo -notmatch '^[\w.-]+/[\w.-]+$') { throw "Repo must be owner/name, not '$Repo'." }
 	if ($Commit -cnotmatch '^[0-9a-f]{40}$') { throw "Commit must be a full 40-character SHA, not '$Commit'." }
-	if ($Released -notmatch '^\d{4}-\d{2}-\d{2}$') { throw "Released must be YYYY-MM-DD, not '$Released'." }
+	if ($Released -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { throw "Released must be YYYY-MM-DD, not '$Released'." }
 
 	$Descriptor = Get-PluginDescriptor $PluginDir
 	$Source = Join-Paths $Descriptor.Dir 'Content' 'Docs'
 	if (-not (Test-Path -LiteralPath $Source -PathType Container)) { throw "$($Descriptor.Name) has no Content/Docs folder." }
+	$Problem = Get-DocsFolderProblem $Descriptor.Dir
+	if ($Problem) { throw $Problem }
 
 	$VersionName = $null
 	$Folder = 'preview'
@@ -1855,7 +1869,7 @@ function New-DocsBundle
 	}
 
 	$Json = $Descriptor.Json
-	$Name = [string](Get-JsonValue $Json 'FriendlyName')
+	$Name = ([string](Get-JsonValue $Json 'FriendlyName')).Trim()
 	if (-not $Name) { $Name = $Descriptor.Name }
 	$Slug = ConvertTo-KebabCase $Repo.Split('/')[1]
 	$Modules = @(foreach ($Module in @(Get-JsonValue $Json 'Modules' @())) { @{ name = [string](Get-JsonValue $Module 'Name'); type = [string](Get-JsonValue $Module 'Type') } })
@@ -2038,6 +2052,14 @@ function Find-DocsFile([string]$Root, [string]$Path)
 	return ($Found -join '/')
 }
 
+<# Content/Docs spelled in another case on disk, such as Content/docs, or nothing. Windows finds it; GitHub and git log do not. #>
+function Get-DocsFolderProblem([string]$PluginDir)
+{
+	$Found = Find-DocsFile $PluginDir $script:DocsBase
+	if (-not $Found -or $Found -ceq $script:DocsBase) { return $null }
+	return "The docs folder is $Found. Rename it to $($script:DocsBase): Windows does not mind the case, but GitHub and the docs site do."
+}
+
 # Windows ignores case in file names; GitHub, the Linux build of the site and its URLs do not.
 function Get-DocsFileProblem([string]$BundleDir, [string]$Path, [string]$Url, [string]$What)
 {
@@ -2074,7 +2096,9 @@ function Get-DocsLinkProblem
 		if (-not $Url) { return 'An image needs the path of a file in the docs folder.' }
 		if ($HasScheme) { return "Image $Url is remote, and the docs site loads no remote images. Put the file in the docs folder and give its path relative to this page." }
 		if ($Url.StartsWith('/')) { return "Image $Url is root-relative. Write it relative to this page." }
-		$Resolved = Resolve-DocsPath $Dir ([Uri]::UnescapeDataString(($Url -split '[?#]', 2)[0]))
+		$Path = ConvertFrom-UrlEscapes ($Url -split '[?#]', 2)[0]
+		if ($null -eq $Path) { return "Image $Url is not a valid link: each % must start a UTF-8 escape, such as %20. Write a plain % as %25." }
+		$Resolved = Resolve-DocsPath $Dir $Path
 		if ($Resolved.Up -gt 0 -or -not $Resolved.Path) { return "Image $Url is outside the docs folder ($($Manifest.base)). Move it in." }
 		return Get-DocsFileProblem $BundleDir $Resolved.Path $Url 'Image'
 	}
@@ -2084,8 +2108,9 @@ function Get-DocsLinkProblem
 	if ($HasScheme) { return "Link ${Url}: only http(s), mailto, #anchor and relative links are allowed." }
 	if ($Url.StartsWith('/')) { return "Link $Url is root-relative. Write it relative to this page, as in the repository." }
 
-	$Target = ($Url -split '#', 2)[0]
-	$Resolved = Resolve-DocsPath $Dir ([Uri]::UnescapeDataString($Target))
+	$Target = ConvertFrom-UrlEscapes ($Url -split '#', 2)[0]
+	if ($null -eq $Target) { return "Link $Url is not a valid link: each % must start a UTF-8 escape, such as %20. Write a plain % as %25." }
+	$Resolved = Resolve-DocsPath $Dir $Target
 	if ($Resolved.Up -eq 0 -and $Resolved.Path -match '\.md$')
 	{
 		return Get-DocsFileProblem $BundleDir $Resolved.Path $Url 'Link'
@@ -2096,7 +2121,7 @@ function Get-DocsLinkProblem
 	{
 		return "Link $Url goes to a file that is not a docs page. $($Manifest.repo) is private, so the docs site cannot link to it on GitHub. Link a page, or drop the link."
 	}
-	if ((Resolve-DocsPath "$($Manifest.base)/$Dir" ([Uri]::UnescapeDataString($Target))).Up -gt 0)
+	if ((Resolve-DocsPath "$($Manifest.base)/$Dir" $Target).Up -gt 0)
 	{
 		return "Link $Url points outside the repository."
 	}
@@ -2134,14 +2159,67 @@ function Format-ReferenceLabel([string]$Label)
 	return [regex]::Replace($Label.Trim(), '\s+', ' ').ToLowerInvariant()
 }
 
+<# A link destination as CommonMark reads it: backslash escapes removed and entities such as &#46; decoded, in one pass. #>
+function ConvertFrom-MarkdownDestination([string]$Text)
+{
+	$Evaluator = [Text.RegularExpressions.MatchEvaluator]{
+		param($Match)
+		if ($Match.Groups[1].Success) { return $Match.Groups[1].Value }
+		return [System.Net.WebUtility]::HtmlDecode($Match.Value)
+	}
+	return [regex]::Replace($Text, '\\([!-/:-@\[-`{-~])|&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});', $Evaluator)
+}
+
+<#
+.SYNOPSIS
+A link target with its %-escapes decoded, as the site's decodeURIComponent does it, or nothing when
+a % starts no escape or the bytes are not UTF-8.
+#>
+function ConvertFrom-UrlEscapes([string]$Text)
+{
+	if ($Text.IndexOf('%') -lt 0) { return $Text }
+	if ($Text -match '%(?![0-9A-Fa-f]{2})') { return $null }
+	$Strict = New-Object System.Text.UTF8Encoding $false, $true
+	$Evaluator = [Text.RegularExpressions.MatchEvaluator]{
+		param($Match)
+		$Bytes = [byte[]]@($Match.Value.Substring(1).Split('%') | ForEach-Object { [Convert]::ToByte($_, 16) })
+		return $Strict.GetString($Bytes)
+	}
+	try { return [regex]::Replace($Text, '(?:%[0-9A-Fa-f]{2})+', $Evaluator) }
+	catch { return $null }
+}
+
+<#
+.SYNOPSIS
+The text a heading shows, roughly as the site reads it: links give their text, images their alt
+text. Enough to tell an empty heading, such as "# [](Page.md)", from one with a title.
+#>
+function Get-MarkdownHeadingText([string]$Text, [hashtable]$Labels = @{})
+{
+	# Code spans and escaped characters show as text; mark them so brackets in them pair with nothing.
+	$Text = [regex]::Replace($Text, '(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)', { param($Match) if ($Match.Groups[2].Value.Trim()) { 'x' } else { ' ' } })
+	$Text = [regex]::Replace($Text, '\\[!-/:-@\[-`{-~]', 'x')
+	$Text = [regex]::Replace($Text, '&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});', { param($Match) if ([System.Net.WebUtility]::HtmlDecode($Match.Value).Trim()) { 'x' } else { ' ' } })
+	$Inline = '!?\[([^\[\]]*)\]\((?:[^()]|\([^()]*\))*\)'
+	$Reference = { param($Match) if ($Labels.ContainsKey((Format-ReferenceLabel $Match.Groups[2].Value))) { $Match.Groups[1].Value } else { $Match.Value } }
+	do
+	{
+		$Before = $Text
+		$Text = [regex]::Replace($Text, $Inline, '$1')
+		$Text = [regex]::Replace($Text, '!?\[([^\[\]]*)\]\[([^\[\]]+)\]', $Reference)
+		$Text = [regex]::Replace($Text, '!?\[([^\[\]]+)\]\[\]', { param($Match) if ($Labels.ContainsKey((Format-ReferenceLabel $Match.Groups[1].Value))) { $Match.Groups[1].Value } else { $Match.Value } })
+	} while ($Text -cne $Before)
+	return $Text.Trim()
+}
+
 <#
 .SYNOPSIS
 The links, images and raw HTML in a run of Markdown lines, such as a paragraph.
 
 .DESCRIPTION
 Read left to right, as CommonMark does: code spans first, then autolinks and raw HTML, which bind
-tighter than the brackets of a link. A reference image, ![alt][label], comes back as an imageref
-with its label, so that its definition is checked as an image.
+tighter than the brackets of a link. A reference image, ![alt][label] with label defined, comes
+back as an imageref with its label.
 
 .PARAMETER Lines
 The lines, each with Line (its number in the file) and Text.
@@ -2168,8 +2246,10 @@ function Get-DocsInlineItems
 		$Text += [string]$Entry.Text
 	}
 	$Length = $Text.Length
-	# A copy that blanks what has been dealt with, keeping every offset.
+	# A copy that blanks what has been dealt with, keeping every offset. Its string form is rebuilt
+	# only after a change, so a paragraph full of < stays linear.
 	$Masked = $Text.ToCharArray()
+	$Copy = @{ Text = $null }
 	$Items = New-Object System.Collections.Generic.List[object]
 
 	$LineAt = {
@@ -2181,6 +2261,7 @@ function Get-DocsInlineItems
 	$Blank = {
 		param([int]$From, [int]$To)
 		for ($K = $From; $K -lt $To; ++$K) { if ($Masked[$K] -ne "`n") { $Masked[$K] = ' ' } }
+		$Copy.Text = $null
 	}
 	$Add = {
 		param([string]$Kind, [string]$Value, [int]$Offset)
@@ -2234,7 +2315,8 @@ function Get-DocsInlineItems
 		{
 			# Raw HTML before autolinks, as the site's parser reads <!x@example.com>. An email
 			# autolink holds nothing the rules look at, so it is left as text.
-			$Current = -join $Masked
+			if ($null -eq $Copy.Text) { $Copy.Text = New-Object string (,$Masked) }
+			$Current = $Copy.Text
 			$Match = $script:InlineHtmlPattern.Match($Current, $Index)
 			if ($Match.Success) { & $Add 'html' $Text.Substring($Index, $Match.Length) $Index }
 			else
@@ -2306,7 +2388,7 @@ function Get-DocsInlineItems
 			}
 			if ($Ok -and $P -lt $Length -and $Masked[$P] -eq ')')
 			{
-				$Destination = [regex]::Replace($Text.Substring($From, $To - $From), '\\([!-/:-@\[-`{-~])', '$1')
+				$Destination = ConvertFrom-MarkdownDestination $Text.Substring($From, $To - $From)
 				& $Add $Kind $Destination $Opener.At
 				& $Blank $Next ($P + 1)
 				$End = $P + 1
@@ -2324,8 +2406,11 @@ function Get-DocsInlineItems
 				if ($LabelEnd -gt $Next + 1) { $Label = $Text.Substring($Next + 1, $LabelEnd - $Next - 1) }
 				if ($LabelEnd -gt $Next) { $After = $LabelEnd + 1 }
 			}
-			if ($Opener.Image) { & $Add 'imageref' $Label $Opener.At }
-			if ($Labels.ContainsKey((Format-ReferenceLabel $Label))) { $End = $After }
+			if ($Labels.ContainsKey((Format-ReferenceLabel $Label)))
+			{
+				if ($Opener.Image) { & $Add 'imageref' $Label $Opener.At }
+				$End = $After
+			}
 		}
 
 		if ($End -lt 0) { $Index++; continue }
@@ -2355,7 +2440,7 @@ function Split-MarkdownDefinitions([object[]]$Lines)
 		# [^1]: is a footnote, and a label needs more than spaces.
 		$Label = $Match.Groups[1].Value
 		if (-not $Label.Trim() -or $Label.StartsWith('^')) { break }
-		$Url = [regex]::Replace($Match.Groups[2].Value + $Match.Groups[3].Value, '\\([!-/:-@\[-`{-~])', '$1')
+		$Url = ConvertFrom-MarkdownDestination ($Match.Groups[2].Value + $Match.Groups[3].Value)
 		$Definitions.Add([pscustomobject]@{ Label = (Format-ReferenceLabel $Label); Url = $Url; Line = $Lines[$Index].Line })
 		$Index += $Match.Value.Split("`n").Count
 	}
@@ -2438,7 +2523,7 @@ function Test-DocsMarkdown
 		$Para.Clear()
 		$Leaf.Kind = ''
 	}
-	$AtxPattern = '^(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$'
+	$AtxPattern = '^(#{1,6})(?:[ \t](.*))?$'
 	$BreakPattern = '^([-*_])([ \t]*\1){2,}[ \t]*$'
 	$FencePattern = '^(?:(`{3,})(?!.*`)|(~{3,}))'
 	# What cuts a paragraph short, besides quotes, list items and footnotes.
@@ -2516,7 +2601,8 @@ function Test-DocsMarkdown
 				$Interrupting = $false
 				continue
 			}
-			$Item = [regex]::Match($Body, '^([-+*]|(\d{1,9})[.)])( *)(.*)$')
+			# ASCII digits only: .NET's \d also takes other scripts' digits, which [int] cannot read.
+			$Item = [regex]::Match($Body, '^([-+*]|([0-9]{1,9})[.)])( *)(.*)$')
 			if (-not $Item.Success -or ($Item.Groups[3].Length -eq 0 -and $Item.Groups[4].Length -gt 0)) { break }
 			$Empty = -not $Item.Groups[4].Value.Trim()
 			if ($Interrupting -and ($Empty -or ($Item.Groups[2].Success -and [int]$Item.Groups[2].Value -ne 1))) { break }
@@ -2582,7 +2668,7 @@ function Test-DocsMarkdown
 				{
 					$Level = 2
 					if ($Body[0] -eq '=') { $Level = 1 }
-					$Headings.Add([pscustomobject]@{ Level = $Level; Line = $Split.Rest[0].Line; Nested = $Nested })
+					$Headings.Add([pscustomobject]@{ Level = $Level; Line = $Split.Rest[0].Line; Nested = $Nested; Text = (@($Split.Rest | ForEach-Object { $_.Text }) -join "`n") })
 					$Spans.Add($Split.Rest)
 					continue
 				}
@@ -2609,8 +2695,10 @@ function Test-DocsMarkdown
 		$Atx = [regex]::Match($Body, $AtxPattern)
 		if ($Atx.Success)
 		{
-			$Headings.Add([pscustomobject]@{ Level = $Atx.Groups[1].Value.Length; Line = $Number; Nested = $Nested })
-			$Spans.Add(@([pscustomobject]@{ Line = $Number; Text = $Atx.Groups[2].Value.Trim() }))
+			# Without the closing #s, which need a space before them: "# #" is an empty H1.
+			$Content = [regex]::Replace($Atx.Groups[2].Value.Trim([char[]]" `t"), '(?:^|[ \t]+)#+$', '').Trim([char[]]" `t")
+			$Headings.Add([pscustomobject]@{ Level = $Atx.Groups[1].Value.Length; Line = $Number; Nested = $Nested; Text = $Content })
+			$Spans.Add(@([pscustomobject]@{ Line = $Number; Text = $Content }))
 			continue
 		}
 
@@ -2634,6 +2722,9 @@ function Test-DocsMarkdown
 	}
 	& $CloseLeaf
 
+	$Labels = @{}
+	foreach ($Definition in $Definitions) { $Labels[$Definition.Label] = $true }
+
 	# Rules 1 and 2: one H1, first and on its own, and no skipped levels. Like the site, an H1 does
 	# not reset the level, so an H3 straight after it is a skip.
 	$H1 = @($Headings | Where-Object { $_.Level -eq 1 })
@@ -2645,6 +2736,7 @@ function Test-DocsMarkdown
 	{
 		if ($H1[0].Nested) { & $Problem $H1[0].Line 'The H1 is inside a quote, list item or footnote. Start the page with a plain "# Title"; it is the page title.' }
 		elseif ($First -ne $H1[0].Line) { & $Problem $First "Content before the H1 on line $($H1[0].Line). The H1 is the page title and must come first." }
+		if (-not (Get-MarkdownHeadingText $H1[0].Text $Labels)) { & $Problem $H1[0].Line 'The H1 is empty; it is the page title.' }
 		foreach ($Extra in @($H1 | Select-Object -Skip 1)) { & $Problem $Extra.Line 'More than one H1. The first is the page title; use ## for sections.' }
 	}
 	$Last = 1
@@ -2656,15 +2748,12 @@ function Test-DocsMarkdown
 	}
 
 	# Rules 3 to 7.
-	$Labels = @{}
-	foreach ($Definition in $Definitions) { $Labels[$Definition.Label] = $true }
 	foreach ($Span in $Spans)
 	{
 		foreach ($Item in (Get-DocsInlineItems -Lines $Span -Labels $Labels)) { $Items.Add($Item) }
 	}
 	$Dir = ''
 	if ($Path.Contains('/')) { $Dir = $Path.Substring(0, $Path.LastIndexOf('/')) }
-	$ImageLabels = @{}
 	foreach ($Item in $Items)
 	{
 		if ($Item.Kind -eq 'html')
@@ -2674,15 +2763,16 @@ function Test-DocsMarkdown
 		}
 		if ($Item.Kind -eq 'imageref')
 		{
-			$ImageLabels[(Format-ReferenceLabel $Item.Value)] = $true
+			& $Problem $Item.Line "Image ![...][$($Item.Value)] is a reference. Write images as ![alt](path): the docs site checks a reference as a link, not an image."
 			continue
 		}
 		$Message = Get-DocsLinkProblem -Url $Item.Value -Image ($Item.Kind -eq 'image') -Dir $Dir -BundleDir $BundleDir -Manifest $Manifest
 		if ($Message) { & $Problem $Item.Line $Message }
 	}
+	# As links, as the site checks them, even those an image uses.
 	foreach ($Definition in $Definitions)
 	{
-		$Message = Get-DocsLinkProblem -Url $Definition.Url -Image $ImageLabels.ContainsKey($Definition.Label) -Dir $Dir -BundleDir $BundleDir -Manifest $Manifest
+		$Message = Get-DocsLinkProblem -Url $Definition.Url -Dir $Dir -BundleDir $BundleDir -Manifest $Manifest
 		if ($Message) { & $Problem $Definition.Line $Message }
 	}
 
@@ -2727,57 +2817,63 @@ function Test-DocsBundle
 		& $Fail "Not a docs bundle: $($_.Exception.Message)"
 		return [pscustomobject]$State
 	}
-	$Base = [string](Get-JsonValue $Manifest 'base')
+	# Keys in their exact case, as the site reads JSON.
+	$Has = { param([string]$Key) @($Manifest.PSObject.Properties | Where-Object { $_.Name -ceq $Key }).Count -gt 0 }
+	$Value = { param([string]$Key) @($Manifest.PSObject.Properties | Where-Object { $_.Name -ceq $Key } | ForEach-Object { $_.Value })[0] }
+	$Base = [string](& $Value 'base')
 	if (-not $Base) { $Base = $script:DocsBase }
 
 	# docs.json -------------------------------------------------------------------------------
 
 	foreach ($Key in $script:DocsRequiredKeys)
 	{
-		if (-not $Manifest.PSObject.Properties[$Key]) { & $Fail "docs.json has no `"$Key`"." }
+		if (-not (& $Has $Key)) { & $Fail "docs.json has no `"$Key`"." }
 	}
-	if ((Get-JsonValue $Manifest 'schema') -ne 1) { & $Fail 'docs.json: "schema" must be 1.' }
+	if ((& $Value 'schema') -ne 1) { & $Fail 'docs.json: "schema" must be 1.' }
 
-	$Section = [string](Get-JsonValue $Manifest 'section')
+	$Section = [string](& $Value 'section')
 	if ($script:DocsSections -cnotcontains $Section) { & $Fail "docs.json: section '$Section' is not one the docs site knows: $($script:DocsSections -join ', ')." }
-	$Slug = [string](Get-JsonValue $Manifest 'slug')
+	$Slug = [string](& $Value 'slug')
 	if ($Slug -cnotmatch '^[a-z0-9]+(-[a-z0-9]+)*$') { & $Fail "docs.json: slug '$Slug' must be lowercase kebab-case." }
 
 	$Hints = @{ name = ' Set FriendlyName in the .uplugin.'; description = ' Set Description in the .uplugin; the docs site shows it on cards.' }
 	foreach ($Key in @('name', 'description', 'landing', 'ref', 'base'))
 	{
-		if ($Manifest.PSObject.Properties[$Key] -and -not [string](Get-JsonValue $Manifest $Key)) { & $Fail "docs.json: `"$Key`" is empty.$($Hints[$Key])" }
+		if ((& $Has $Key) -and -not ([string](& $Value $Key)).Trim()) { & $Fail "docs.json: `"$Key`" is empty.$($Hints[$Key])" }
 	}
 
-	$Released = Get-JsonValue $Manifest 'released'
+	$Released = & $Value 'released'
 	if ($Released -is [DateTime]) { $Released = $Released.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) }
-	if ([string]$Released -notmatch '^\d{4}-\d{2}-\d{2}$') { & $Fail 'docs.json: "released" must be a date, YYYY-MM-DD.' }
-	if ([string](Get-JsonValue $Manifest 'commit') -cnotmatch '^[0-9a-f]{40}$') { & $Fail 'docs.json: "commit" must be a full 40-character SHA.' }
-	if ([string](Get-JsonValue $Manifest 'repo') -notmatch '^[\w.-]+/[\w.-]+$') { & $Fail 'docs.json: "repo" must be owner/name.' }
+	if ([string]$Released -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { & $Fail 'docs.json: "released" must be a date, YYYY-MM-DD.' }
+	if ([string](& $Value 'commit') -cnotmatch '^[0-9a-f]{40}$') { & $Fail 'docs.json: "commit" must be a full 40-character SHA.' }
+	if ([string](& $Value 'repo') -notmatch '^[\w.-]+/[\w.-]+$') { & $Fail 'docs.json: "repo" must be owner/name.' }
 	foreach ($Key in @('preview', 'private'))
 	{
-		if ($Manifest.PSObject.Properties[$Key] -and (Get-JsonValue $Manifest $Key) -isnot [bool]) { & $Fail "docs.json: `"$Key`" must be true or false." }
+		if ((& $Has $Key) -and (& $Value $Key) -isnot [bool]) { & $Fail "docs.json: `"$Key`" must be true or false." }
 	}
 	foreach ($Key in @('supportUrl', 'fabUrl'))
 	{
-		$Value = Get-JsonValue $Manifest $Key
-		if ($null -ne $Value -and -not ($Value -is [string] -and $Value -cmatch $script:DocsUrlPattern)) { & $Fail "docs.json: `"$Key`" must be an http(s) URL or null." }
+		$Url = & $Value $Key
+		if ($null -ne $Url -and -not ($Url -is [string] -and $Url -cmatch $script:DocsUrlPattern)) { & $Fail "docs.json: `"$Key`" must be an http(s) URL or null." }
 	}
-	$Glyph = Get-JsonValue $Manifest 'glyph'
-	if ($null -ne $Glyph -and -not ($Glyph -is [string] -and $Glyph -cmatch '^[A-Za-z0-9]{1,2}$')) { & $Fail 'docs.json: "glyph" must be one or two letters or digits.' }
+	$Glyph = & $Value 'glyph'
+	if ($null -ne $Glyph -and -not ($Glyph -is [string] -and $Glyph -cmatch '^[A-Za-z]{1,2}$')) { & $Fail 'docs.json: "glyph" must be one or two letters.' }
 
-	$Version = Get-JsonValue $Manifest 'version'
+	$Version = & $Value 'version'
 	$Folder = 'preview'
-	if ((Get-JsonValue $Manifest 'preview') -eq $true)
+	if ((& $Value 'preview') -eq $true)
 	{
 		if ($null -ne $Version) { & $Fail 'docs.json: a preview has "version": null.' }
+	}
+	elseif ($null -eq $Version)
+	{
+		# Docs that are not versioned, as the contract allows.
+		$Folder = 'current'
 	}
 	else
 	{
 		$Folder = [string]$Version
-		$Valid = -not $Folder.StartsWith('v')
-		try { $null = ConvertFrom-ReleaseVersion $Folder } catch { $Valid = $false }
-		if (-not $Valid) { & $Fail "docs.json: version '$Folder' is not a release version such as 1.0.1." }
+		if (-not (Test-DocsVersion $Folder)) { & $Fail "docs.json: version '$Folder' is not a release version such as 1.0.1." }
 	}
 	$Expected = "$Section/$Slug/$Folder"
 	$Actual = @($Root.Replace('\', '/').Split('/') | Select-Object -Last 3) -join '/'
@@ -2824,7 +2920,7 @@ function Test-DocsBundle
 		& $Fail ([string]::Format($Invariant, 'The docs are over the 25 MB limit ({0:N0} bytes). Shrink or drop images.', $Total))
 	}
 
-	$Landing = [string](Get-JsonValue $Manifest 'landing')
+	$Landing = [string](& $Value 'landing')
 	if ($Landing)
 	{
 		$Found = Find-DocsFile $Root $Landing
@@ -2853,7 +2949,14 @@ function Test-DocsBundle
 			& $Fail 'The page is not UTF-8, which is how the docs site reads it. Save it as UTF-8.' "$Base/$File"
 			continue
 		}
-		foreach ($Problem in (Test-DocsMarkdown -Text $Text -Path $File -BundleDir $Root -Manifest $Manifest))
+		# A bug in the checker fails this page, not the step, so runs without publish-docs only warn.
+		try { $Problems = @(Test-DocsMarkdown -Text $Text -Path $File -BundleDir $Root -Manifest $Manifest) }
+		catch
+		{
+			& $Fail "The docs check failed on this page: $($_.Exception.Message) Report it to KhaosSystems/unreal-actions." "$Base/$File"
+			continue
+		}
+		foreach ($Problem in $Problems)
 		{
 			& $Fail $Problem.Message "$Base/$File" $Problem.Line
 		}
@@ -2864,13 +2967,30 @@ function Test-DocsBundle
 
 <#
 .SYNOPSIS
+A release bundle's docs.json, once the bundle has passed Test-DocsBundle. Anything else stops here,
+before a folder in docs-content is replaced: a preview, docs with no version, or a bundle whose
+docs.json would name the wrong folder.
+#>
+function Read-DocsRelease([string]$BundleDir)
+{
+	$Manifest = Read-DocsManifest $BundleDir
+	if ($Manifest.preview) { throw "$BundleDir is a preview, and previews are never published. Build the bundle with a release tag." }
+	if (-not (Test-DocsVersion $Manifest.version)) { throw "$BundleDir has no release version, such as 1.0.1, in its docs.json. Only releases are published." }
+	$Result = Test-DocsBundle -BundleDir $BundleDir
+	if ($Result.Errors -gt 0) { throw "$BundleDir has $($Result.Errors) problem(s); see the errors above. Nothing was published." }
+	return $Manifest
+}
+
+<#
+.SYNOPSIS
 Commit a docs bundle into a docs-content checkout and push it.
 
 .DESCRIPTION
 Replaces <section>/<slug>/<version>/ with a release's bundle and commits that folder alone, as
-"<Name> <version> docs". A preview is refused: the contract has CI push releases only. When the push is rejected because the branch moved on, it fetches,
-rebases and tries again, three tries in all, as the contract says; any other failure stops at
-once. When the folder already holds the bundle, as on a re-run, nothing is committed.
+"<Name> <version> docs". The bundle must pass Read-DocsRelease: CI pushes releases only. When the
+push is rejected because the branch moved on, it fetches, rebases and tries again, three tries in
+all, as the contract says; any other failure stops at once. When the folder already holds the
+bundle, as on a re-run, nothing is committed.
 
 .OUTPUTS
 Folder, Changed, and Commit, the commit the branch is at.
@@ -2885,8 +3005,7 @@ function Publish-DocsBundle
 		[int]$Tries = 3
 	)
 
-	$Manifest = Read-DocsManifest $BundleDir
-	if ($Manifest.preview) { throw 'A preview bundle is never published; docs-content holds releases only. Build the bundle with a release tag.' }
+	$Manifest = Read-DocsRelease $BundleDir
 	$Folder = Get-DocsBundleFolder $Manifest
 	$Identity = @('-c', 'user.name=github-actions[bot]', '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com')
 	$Git = {

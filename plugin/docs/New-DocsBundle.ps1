@@ -49,6 +49,21 @@ if (-not (Test-Path -LiteralPath (Join-Paths $Descriptor.Dir 'Content' 'Docs') -
 	}
 	Write-Host "$($Descriptor.Name) has no Content/Docs; nothing to check."
 	Set-CiOutput 'bundle-dir' ''
+	Set-CiOutput 'folder' ''
+	Set-CiOutput 'zip' ''
+	return
+}
+$Problem = Get-DocsFolderProblem $Descriptor.Dir
+if ($Problem)
+{
+	if ($Strict)
+	{
+		Write-CiAnnotation error $Problem -Title 'Docs'
+		throw $Problem
+	}
+	Write-CiAnnotation warning "$Problem The docs are not checked until then." -Title 'Docs'
+	Set-CiOutput 'bundle-dir' ''
+	Set-CiOutput 'folder' ''
 	Set-CiOutput 'zip' ''
 	return
 }
@@ -135,4 +150,5 @@ if ($Tag)
 
 Add-CiSummary ($Summary -join "`n")
 Set-CiOutput 'bundle-dir' $Bundle.Dir
+Set-CiOutput 'folder' $Bundle.Folder
 Set-CiOutput 'zip' $Zip

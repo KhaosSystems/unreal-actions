@@ -653,6 +653,7 @@ try
 	Write-Host 'Docs bundles'
 	Check 'slugs are kebab-case' ((ConvertTo-KebabCase 'KhaosFolderIcons') -eq 'khaos-folder-icons' -and (ConvertTo-KebabCase 'UIWidgets') -eq 'ui-widgets' -and (ConvertTo-KebabCase 'Khaos Docs 2') -eq 'khaos-docs-2')
 	Check "glyphs leave out the maker's name" ((Get-DocsGlyph 'Khaos Palette' 'Khaos Systems') -eq 'PA' -and (Get-DocsGlyph 'Khaos Folder Icons' 'Khaos Systems') -eq 'FI' -and (Get-DocsGlyph 'Sample' 'Example Studio') -eq 'SA')
+	Check 'glyphs are letters only, or none' ((Get-DocsGlyph 'Khaos 3D Tools' 'Khaos Systems') -ceq 'DT' -and $null -eq (Get-DocsGlyph 'Khaos 2048' 'Khaos Systems') -and $null -eq (Get-DocsGlyph 'X' 'Example Studio'))
 	Check 'page URLs are kebab-case paths, the landing page at the root' ((Get-DocsPagePath 'Sample.md' 'Sample.md').Path -eq '' -and (Get-DocsPagePath 'Guides/First Steps.md' 'Sample.md').Path -eq 'guides/first-steps/')
 
 	$Commit = '0123456789abcdef0123456789abcdef01234567'
@@ -800,6 +801,12 @@ try
 		@{ Name = 'a footnote before the H1'; Text = "[^1]: A note.`n`n# Title`n"; Line = 1; Expect = 'must come first' }
 		@{ Name = 'an H1 in a list item'; Text = "- # Title`n`nText.`n"; Line = 1; Expect = 'inside a quote, list item or footnote' }
 		@{ Name = 'an H1 in a quote'; Text = "> # Title`n`nText.`n"; Line = 1; Expect = 'inside a quote, list item or footnote' }
+		@{ Name = 'an empty H1'; Text = "#`n`nText.`n"; Line = 1; Expect = 'The H1 is empty' }
+		@{ Name = 'an H1 of closing #s'; Text = "# #`n`nText.`n"; Line = 1; Expect = 'The H1 is empty' }
+		@{ Name = 'an H1 of spaces'; Text = "#    `n`nText.`n"; Line = 1; Expect = 'The H1 is empty' }
+		@{ Name = 'an H1 of an image with no alt text'; Text = "# ![](Images/Shot.png)`n`nText.`n"; Line = 1; Expect = 'The H1 is empty' }
+		@{ Name = 'an H1 of a link with no text'; Text = "# [](Sample.md)`n`nText.`n"; Line = 1; Expect = 'The H1 is empty' }
+		@{ Name = 'an underlined H1 with no text'; Text = "[](Sample.md)`n===`n`nText.`n"; Line = 1; Expect = 'The H1 is empty' }
 		@{ Name = 'a skipped heading level'; Text = "# Title`n`n### Deep`n"; Line = 3; Expect = 'skips a level, H1 to H3' }
 		@{ Name = 'raw HTML'; Text = "# Title`n`nA line<br>break.`n"; Line = 3; Expect = 'Raw HTML is not allowed: <br>' }
 		@{ Name = 'an HTML block'; Text = "# Title`n`n<details>`n<summary>More</summary>`n</details>`n"; Line = 3; Expect = 'Raw HTML' }
@@ -809,6 +816,12 @@ try
 		@{ Name = 'a C++ type in a heading'; Text = "# Title`n`n## Using TArray<FString>`n"; Line = 3; Expect = 'Raw HTML is not allowed: <FString>' }
 		@{ Name = 'raw HTML before an autolink'; Text = "# Title`n`nMail <!x@example.com>.`n"; Line = 3; Expect = 'Raw HTML' }
 		@{ Name = 'raw HTML after a label that is no definition'; Text = "# Title`n`n[Optional]: <b>bold</b>`n"; Line = 3; Expect = 'Raw HTML is not allowed: <b>' }
+		@{ Name = 'raw HTML on a lazy line'; Text = "# Title`n`n> A quote`n    <b>bold</b>`n"; Line = 4; Expect = 'Raw HTML' }
+		@{ Name = 'a link with no target'; Text = "# Title`n`nSee [x]().`n"; Line = 3; Expect = 'Link with no target.' }
+		@{ Name = 'a link to a missing page, spelled with an entity'; Text = "# Title`n`nSee [it](Missing&#46;md).`n"; Line = 3; Expect = 'is broken' }
+		@{ Name = 'a % that starts no escape, in a link'; Text = "# Title`n`nSee [it](../../Source/100%.h).`n"; Line = 3; Expect = 'is not a valid link' }
+		@{ Name = 'a % that starts no escape, in an image'; Text = "# Title`n`n![Shot](Images/100%.png)`n"; Line = 3; Expect = 'is not a valid link' }
+		@{ Name = 'escapes that are not UTF-8'; Text = "# Title`n`nSee [it](Sample%C3.md).`n"; Line = 3; Expect = 'is not a valid link' }
 		@{ Name = 'a broken link'; Text = "# Title`n`nSee [it](Missing.md).`n"; Line = 3; Expect = 'is broken' }
 		@{ Name = 'a broken link on a later line of a paragraph'; Text = "# Title`n`nOne`ntwo [it](Missing.md#part)`n"; Line = 4; Expect = 'is broken' }
 		@{ Name = 'a broken link in a heading'; Text = "# Title`n`n## See [it](Missing.md)`n"; Line = 3; Expect = 'is broken' }
@@ -822,7 +835,9 @@ try
 		@{ Name = 'a link with the wrong case'; Text = "# Title`n`nSee [setup](guides/setup.md).`n"; Line = 3; Expect = 'wrong case: the file is Guides/Setup.md' }
 		@{ Name = 'an image with the wrong case'; Text = "# Title`n`n![Shot](images/shot.png)`n"; Line = 3; Expect = 'wrong case: the file is Images/Shot.png' }
 		@{ Name = 'a remote image'; Text = "# Title`n`n![Shot](https://example.com/shot.png)`n"; Line = 3; Expect = 'loads no remote images' }
-		@{ Name = 'a remote image by reference'; Text = "# Title`n`n![Shot][s]`n`n[s]: https://example.com/shot.png`n"; Line = 5; Expect = 'loads no remote images' }
+		@{ Name = 'an image by reference'; Text = "# Title`n`n![Shot][s]`n`n[s]: Images/Shot.png`n"; Line = 3; Expect = 'Write images as ![alt](path)' }
+		@{ Name = 'a remote image by reference'; Text = "# Title`n`n![Shot][s]`n`n[s]: https://example.com/shot.png`n"; Line = 3; Expect = 'Write images as ![alt](path)' }
+		@{ Name = "an image by reference's definition, in a private repository"; Text = "# Title`n`n![Shot][s]`n`n[s]: Images/Shot.png`n"; Line = 5; Expect = 'is private'; Private = $true }
 		@{ Name = 'a remote image inside a link'; Text = "# Title`n`n[![b](https://example.com/b.svg)](https://example.com)`n"; Line = 3; Expect = 'loads no remote images' }
 		@{ Name = 'a root-relative image'; Text = "# Title`n`n![Shot](/Images/Shot.png)`n"; Line = 3; Expect = 'is root-relative. Write it relative to this page.' }
 		@{ Name = 'an image outside the bundle'; Text = "# Title`n`n![Icon](../../Resources/Icon128.png)`n"; Line = 3; Expect = 'outside the docs folder' }
@@ -854,8 +869,14 @@ try
 		@{ Name = 'a fence opened on the first line of a list item'; Text = (@('# Title', '', "- $Fence", '  # comment', '  <div>', "  $Fence", '') -join "`n") }
 		@{ Name = 'indented code in a list item'; Text = "# Title`n`n-     <div>`n" }
 		@{ Name = 'a < that opens no HTML'; Text = "# Title`n`nUse a <? b, or a <!-- c, to compare.`n" }
-		@{ Name = 'a title on the line after a definition'; Text = "# Title`n`nSee [it][x].`n`n[x]: Sample.md`n  `"Home`"`n" }
-		@{ Name = 'a label that is no definition'; Text = "# Title`n`n[Note]: plain text.`n" }
+		@{ Name = 'a title on the line after a definition'; Text = "# Title`n`nSee [it][x].`n`n[x]: Sample.md`n  `"A <b> title`"`n" }
+		@{ Name = 'a label that is no definition'; Text = "# Title`n`n[Note]: Missing.md for now.`n" }
+		@{ Name = 'an H1 of an image with alt text'; Text = "# ![Logo](Images/Shot.png)`n`nText.`n" }
+		@{ Name = 'an H1 with closing #s'; Text = "# Title ##`n" }
+		@{ Name = 'a page and an image with spaces in their names, linked with %20'; Text = "# Title`n`nSee [it](First%20Steps.md) and ![it](Images/My%20Shot.png).`n"; Files = @('First Steps.md', 'Images/My Shot.png') }
+		@{ Name = 'a page link spelled with an entity, in a private repository'; Text = "# Title`n`nSee [it](Guides/Setup&#46;md).`n"; Private = $true }
+		@{ Name = 'a list number in another script'; Text = "# Title`n`nSteps:`n$([char]0xFF11). Enable the plugin.`n" }
+		@{ Name = 'brackets after a ! that are no image'; Text = "# Title`n`nWow![not a reference] here.`n" }
 		@{ Name = 'a footnote, in a private repository'; Text = "# Title`n`nText[^1].`n`n[^1]: A note.`n"; Private = $true }
 	)
 	foreach ($Case in $Valid)
@@ -863,8 +884,11 @@ try
 		$Dir = $Bundle.Dir
 		if ($Case.Private) { $Dir = $script:PrivateBundle.Dir }
 		New-TestFile "$Dir\Good.md" $Case.Text
+		$Extras = @($Case.Files | Where-Object { $_ } | ForEach-Object { Join-Paths $Dir $_ })
+		foreach ($Extra in $Extras) { New-TestFile $Extra "# Extra`n" }
 		$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Dir }
 		Remove-Item "$Dir\Good.md"
+		foreach ($Extra in $Extras) { Remove-Item -LiteralPath $Extra }
 		Check "passes $($Case.Name)" ($Annotations.Count -eq 0) ($Annotations -join "`n")
 	}
 
@@ -881,7 +905,6 @@ try
 
 	$Json = [IO.File]::ReadAllText("$($Bundle.Dir)\docs.json")
 	$JsonRules = @(
-		@{ Find = '(?m)^  "ref": .*\n'; Replace = ''; Expect = 'docs.json has no "ref".' }
 		@{ Find = '"schema": 1'; Replace = '"schema": 2'; Expect = '"schema" must be 1.' }
 		@{ Find = '"section": "unreal"'; Replace = '"section": "web"'; Expect = "section 'web' is not one the docs site knows" }
 		@{ Find = '"slug": "sample-docs"'; Replace = '"slug": "Bad_Slug"'; Expect = "slug 'Bad_Slug' must be lowercase kebab-case." }
@@ -893,7 +916,10 @@ try
 		@{ Find = '"private": false'; Replace = '"private": "no"'; Expect = '"private" must be true or false.' }
 		@{ Find = '"supportUrl": "[^"]*"'; Replace = '"supportUrl": "support@example.com"'; Expect = '"supportUrl" must be an http(s) URL or null.' }
 		@{ Find = '"fabUrl": "[^"]*"'; Replace = '"fabUrl": "www.fab.com"'; Expect = '"fabUrl" must be an http(s) URL or null.' }
-		@{ Find = '"glyph": "SA"'; Replace = '"glyph": "SAM"'; Expect = '"glyph" must be one or two letters or digits.' }
+		@{ Find = '"glyph": "SA"'; Replace = '"glyph": "SAM"'; Expect = '"glyph" must be one or two letters.' }
+		@{ Find = '"glyph": "SA"'; Replace = '"glyph": "3D"'; Expect = '"glyph" must be one or two letters.' }
+		@{ Find = '"description": "A sample plugin."'; Replace = '"description": " "'; Expect = '"description" is empty.' }
+		@{ Find = '"released": "2026-11-09"'; Replace = ('"released": "2026-11-0' + [char]0x0669 + '"'); Expect = '"released" must be a date' }
 	)
 	foreach ($Rule in $JsonRules)
 	{
@@ -902,6 +928,17 @@ try
 		$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
 		Check "reports docs.json: $($Rule.Expect)" ($Edited -cne $Json -and @($Annotations | Where-Object { $_.StartsWith('::error title=Docs::') -and $_.Contains($Rule.Expect) }).Count -eq 1) ($Annotations -join "`n")
 	}
+	$Required = @('schema', 'section', 'slug', 'name', 'description', 'landing', 'version', 'preview', 'released', 'repo', 'private', 'ref', 'commit', 'base')
+	foreach ($Key in $Required)
+	{
+		Write-Utf8File "$($Bundle.Dir)\docs.json" $Json.Replace("`"$Key`":", "`"x$Key`":")
+		$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
+		Check "reports docs.json without `"$Key`"" (@($Annotations | Where-Object { $_.StartsWith('::error title=Docs::') -and $_.Contains("docs.json has no `"$Key`".") }).Count -eq 1) ($Annotations -join "`n")
+	}
+	# The site reads keys in their exact case.
+	Write-Utf8File "$($Bundle.Dir)\docs.json" $Json.Replace('"schema":', '"Schema":').Replace('"landing":', '"Landing":').Replace('"version":', '"Version":')
+	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
+	Check 'reports docs.json keys in the wrong case as missing' (@($Annotations | Where-Object { $_ -match 'docs.json has no "(schema|landing|version)"\.' }).Count -eq 3) ($Annotations -join "`n")
 	Write-Utf8File "$($Bundle.Dir)\docs.json" $Json
 
 	$FileRules = @(
@@ -940,6 +977,14 @@ try
 	Copy-Item $Bundle.Dir $Moved -Recurse
 	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Moved }
 	Check 'a bundle in the wrong folder is reported' (@($Annotations | Where-Object { $_.Contains('.../unreal/sample-docs/9.9.9, but its docs.json puts it in unreal/sample-docs/1.2.3') }).Count -eq 1) ($Annotations -join "`n")
+
+	# Docs with no version, as the contract allows.
+	$Current = Join-Paths $Temp 'docs-current' 'unreal' 'sample-docs' 'current'
+	New-Item -ItemType Directory -Path (Split-Path $Current) -Force | Out-Null
+	Copy-Item $Bundle.Dir $Current -Recurse
+	Write-Utf8File "$Current\docs.json" $Json.Replace('"version": "1.2.3"', '"version": null')
+	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Current }
+	Check 'docs with no version pass in a folder named current' ($Annotations.Count -eq 0) ($Annotations -join "`n")
 
 	$NoDescription = Join-Paths $Temp 'docs-plain'
 	New-DocsFixture $NoDescription
@@ -1002,7 +1047,7 @@ try
 	Check "a release's bundle is in its version folder, with the tag as its ref and today's date" ($StepJson.version -eq '1.5.0' -and $StepJson.ref -eq 'v1.5.0' -and $StepJson.preview -eq $false -and $Dates -contains $StepJson.released) ($StepJson | ConvertTo-Json -Depth 5)
 	$StepZip = Join-Paths $StepOut 'SampleDocs-1.5.0-docs.zip'
 	$Outputs = @([IO.File]::ReadAllLines($OutputFile))
-	Check 'the step outputs the bundle and its zip, with a .sha256 beside it' ((Same $Outputs @("bundle-dir=$StepDir", "zip=$StepZip")) -and [IO.File]::ReadAllText("$StepZip.sha256") -eq "$(Get-FileSha256 $StepZip)  SampleDocs-1.5.0-docs.zip`n") ($Outputs -join "`n")
+	Check 'the step outputs the bundle, its folder and its zip, with a .sha256 beside it' ((Same $Outputs @("bundle-dir=$StepDir", 'folder=unreal/sample-docs/1.5.0', "zip=$StepZip")) -and [IO.File]::ReadAllText("$StepZip.sha256") -eq "$(Get-FileSha256 $StepZip)  SampleDocs-1.5.0-docs.zip`n") ($Outputs -join "`n")
 
 	Remove-Item $OutputFile
 	$Inputs.tag = 'v1.4.0'
@@ -1017,6 +1062,18 @@ try
 	$script:Caught = $null
 	$null = Get-Annotations { try { & $DocsScript -PluginDir $NoDescription -OutDir $ScriptOut -Repository 'Example/Plain' -Private:$false -Strict } catch { $script:Caught = $_.Exception.Message } }
 	Check 'publishing a plugin without docs fails' ($script:Caught -like '*no Content/Docs*') "$script:Caught"
+
+	# Windows finds Content/docs as Content/Docs; GitHub and git log do not.
+	$Lower = Join-Paths $Temp 'docs-lower'
+	New-DocsFixture $Lower
+	[IO.Directory]::Move("$Lower\Content\Docs", "$Lower\Content\Docs-renamed")
+	[IO.Directory]::Move("$Lower\Content\Docs-renamed", "$Lower\Content\docs")
+	$LowerOut = Join-Paths $Temp 'docs-lower-out'
+	$script:Caught = $null
+	$null = Get-Annotations { try { & $DocsScript -PluginDir $Lower -OutDir $LowerOut -Repository 'Example/Lower' -Private:$false -Strict } catch { $script:Caught = $_.Exception.Message } }
+	Check 'publishing docs in Content/docs fails, saying to rename it' ($script:Caught -like 'The docs folder is Content/docs. Rename it to Content/Docs*') "$script:Caught"
+	$Annotations = Get-Annotations { try { & $DocsScript -PluginDir $Lower -OutDir $LowerOut -Repository 'Example/Lower' -Private:$false } catch { Write-Host $_.Exception.Message } }
+	Check 'without publish-docs it is a warning, and nothing is built' (@($Annotations | Where-Object { $_ -like '::warning title=Docs::The docs folder is Content/docs*' }).Count -eq 1 -and -not (Test-Path -LiteralPath $LowerOut)) ($Annotations -join "`n")
 
 	Write-Host 'Docs publishing'
 	$DocsRemote = Join-Paths $Temp 'docs-content.git'
@@ -1056,6 +1113,20 @@ try
 	try { $null = Publish-DocsBundle -BundleDir $script:PreviewBundle.Dir -ContentDir $ContentA } catch { $script:Caught = $_.Exception.Message }
 	Check 'a preview is never published' ($script:Caught -like '*never published*' -and (Get-RemoteLine @('rev-list', '--count', 'main')) -eq $Count) "$script:Caught"
 
+	# Its folder would be unreal/sample-docs/current, beside the product's versions.
+	$script:Caught = $null
+	try { $null = Publish-DocsBundle -BundleDir $Current -ContentDir $ContentA } catch { $script:Caught = $_.Exception.Message }
+	Check 'docs with no version are never published' ($script:Caught -like '*no release version*' -and (Get-RemoteLine @('rev-list', '--count', 'main')) -eq $Count -and (Test-Path -LiteralPath "$ContentA\unreal\sample-docs\1.0.0\Sample.md")) "$script:Caught"
+
+	# A docs.json that names another product's folder: publishing would replace it.
+	$Stray = Join-Paths $Temp 'docs-stray' 'unreal' 'sample-docs' '1.2.3'
+	New-Item -ItemType Directory -Path (Split-Path $Stray) -Force | Out-Null
+	Copy-Item $Bundle.Dir $Stray -Recurse
+	Write-Utf8File "$Stray\docs.json" $Json.Replace('"slug": "sample-docs"', '"slug": "other"').Replace('"version": "1.2.3"', '"version": "1.0.0"')
+	$script:Caught = $null
+	$null = Get-Annotations { try { $null = Publish-DocsBundle -BundleDir $Stray -ContentDir $ContentA } catch { $script:Caught = $_.Exception.Message } }
+	Check 'a bundle that breaks a rule is never published' ($script:Caught -like '*problem(s)*Nothing was published.' -and (Same (Get-RemoteLine @('rev-parse', 'main:unreal/other', 'main:unreal/sample-docs/1.0.0')) $Untouched) -and (Test-Path -LiteralPath "$ContentA\unreal\other\1.0.0\docs.json")) "$script:Caught"
+
 	# Another product pushes first, so this push is turned away and has to rebase.
 	$ContentB = Join-Paths $Temp 'docs-b'
 	$null = Invoke-NativeQuiet git @('clone', '-q', $DocsRemote, $ContentB)
@@ -1063,13 +1134,42 @@ try
 	$null = Invoke-NativeQuiet git @('-C', $ContentB, 'add', '-A')
 	$null = Invoke-NativeQuiet git (@('-C', $ContentB) + $Identity + @('commit', '-q', '-m', 'Other 2.0.0 docs'))
 	$null = Invoke-NativeQuiet git @('-C', $ContentB, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
-	Remove-Item "$Plugin\Content\Docs\Guides" -Recurse
+	Remove-Item "$Plugin\Content\Docs\Images\Logo.svg"
 	$null = Get-Annotations { $script:Bundle = New-DocsBundle @BundleArguments }
 	$Bundle = $script:Bundle
 	$Output = (& { $script:Published = Publish-DocsBundle -BundleDir $Bundle.Dir -ContentDir $ContentA } 6>&1 | Out-String)
 	$Log = Get-RemoteLine @('log', '--format=%s', 'main')
 	Check 'a push that lost a race is rebased and pushed' ($script:Published.Changed -and $Output.Contains('moved on') -and (Same ($Log | Select-Object -First 2) @('Sample 1.2.3 docs', 'Other 2.0.0 docs'))) ($Log -join ', ')
-	Check 'a page deleted since the last push is gone' (@(Get-RemoteLine @('ls-tree', '-r', '--name-only', 'main', 'unreal/sample-docs/1.2.3') | Where-Object { $_ -like '*Guides*' }).Count -eq 0)
+	Check 'a file deleted since the last push is gone' (@(Get-RemoteLine @('ls-tree', '-r', '--name-only', 'main', 'unreal/sample-docs/1.2.3') | Where-Object { $_ -like '*Logo.svg' }).Count -eq 0)
+
+	# A clone left behind by another product's push, with one try: it gives up and pushes nothing.
+	$Late = $BundleArguments.Clone()
+	$Late.Version = '1.2.4'
+	$null = Get-Annotations { $script:Other = New-DocsBundle @Late }
+	$ContentE = Join-Paths $Temp 'docs-e'
+	$null = Invoke-NativeQuiet git @('clone', '-q', $DocsRemote, $ContentE)
+	$ContentF = Join-Paths $Temp 'docs-f'
+	$null = Invoke-NativeQuiet git @('clone', '-q', $DocsRemote, $ContentF)
+	New-TestFile "$ContentF\unreal\other\4.0.0\docs.json" "{}`n"
+	$null = Invoke-NativeQuiet git @('-C', $ContentF, 'add', '-A')
+	$null = Invoke-NativeQuiet git (@('-C', $ContentF) + $Identity + @('commit', '-q', '-m', 'Other 4.0.0 docs'))
+	$null = Invoke-NativeQuiet git @('-C', $ContentF, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
+	$Head = Get-RemoteLine @('rev-parse', 'main')
+	$script:Caught = $null
+	$null = (& { try { $null = Publish-DocsBundle -BundleDir $script:Other.Dir -ContentDir $ContentE -Tries 1 } catch { $script:Caught = $_.Exception.Message } } 6>&1 | Out-String)
+	Check 'a push turned away on its last try fails, and the branch stays where it was' ($script:Caught -like '*turned away 1 times*' -and (Get-RemoteLine @('rev-parse', 'main')) -eq $Head) "$script:Caught"
+
+	# Another push wrote the same version's folder, so the rebase cannot apply.
+	$ContentG = Join-Paths $Temp 'docs-g'
+	$null = Invoke-NativeQuiet git @('clone', '-q', $DocsRemote, $ContentG)
+	New-TestFile "$ContentF\unreal\sample-docs\1.2.4\Sample.md" "# Someone else`n"
+	$null = Invoke-NativeQuiet git @('-C', $ContentF, 'add', '-A')
+	$null = Invoke-NativeQuiet git (@('-C', $ContentF) + $Identity + @('commit', '-q', '-m', 'Sample 1.2.4 docs, elsewhere'))
+	$null = Invoke-NativeQuiet git @('-C', $ContentF, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
+	$Head = Get-RemoteLine @('rev-parse', 'main')
+	$script:Caught = $null
+	$null = (& { try { $null = Publish-DocsBundle -BundleDir $script:Other.Dir -ContentDir $ContentG } catch { $script:Caught = $_.Exception.Message } } 6>&1 | Out-String)
+	Check 'a rebase that conflicts fails, and is undone' ($script:Caught -like 'Rebasing onto main failed*' -and (Get-RemoteLine @('rev-parse', 'main')) -eq $Head -and -not (Test-Path -LiteralPath "$ContentG\.git\rebase-merge") -and -not (Test-Path -LiteralPath "$ContentG\.git\rebase-apply")) "$script:Caught"
 
 	$PublishScript = Join-Path $Root 'plugin/publish-docs/Publish-Docs.ps1'
 	$RemoteUrl = 'file:///' + $DocsRemote.Replace('\', '/')
@@ -1085,6 +1185,9 @@ try
 	$script:Caught = $null
 	try { & $PublishScript -BundleDir $script:PreviewBundle.Dir -RemoteUrl $RemoteUrl 6>$null } catch { $script:Caught = $_.Exception.Message }
 	Check 'the script refuses a preview' ($script:Caught -like '*is a preview*') "$script:Caught"
+	$script:Caught = $null
+	try { & $PublishScript -BundleDir $Current -RemoteUrl $RemoteUrl 6>$null } catch { $script:Caught = $_.Exception.Message }
+	Check 'the script refuses docs with no version' ($script:Caught -like '*no release version*') "$script:Caught"
 
 	$Next = $BundleArguments.Clone()
 	$Next.Version = '1.3.0'
@@ -1132,6 +1235,125 @@ try
 	$Output = (& { try { $null = Publish-DocsBundle -BundleDir $script:Other.Dir -ContentDir $ContentC } catch { $script:Caught = $_.Exception.Message } } 6>&1 | Out-String)
 	Remove-Item "$DocsRemote\hooks\pre-receive"
 	Check 'any other push failure stops without retrying' ($script:Caught -like '*failed; see the git output*' -and -not $Output.Contains('moved on') -and (Get-RemoteLine @('rev-list', '--count', 'main')) -eq $Count) "$script:Caught"
+
+	# With a token, as on GitHub: a global git config sends GitHub's URL to the local repository.
+	$GlobalConfig = Join-Paths $Temp 'gitconfig'
+	Write-Utf8File $GlobalConfig "[url `"$RemoteUrl`"]`n`tinsteadOf = https://github.com/Example/docs.git`n"
+	$Names = @('DOCS_TOKEN', 'GIT_CONFIG_GLOBAL', 'GCM_INTERACTIVE') + $GitVariables
+	$Saved = @{}
+	foreach ($Name in $Names) { $Saved[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+	$env:DOCS_TOKEN = 'not-a-real-token'
+	$env:GIT_CONFIG_GLOBAL = $GlobalConfig
+	$env:GCM_INTERACTIVE = 'never'
+	$env:GIT_CONFIG_COUNT = '1'
+	$env:GIT_CONFIG_KEY_0 = 'user.name'
+	$env:GIT_CONFIG_VALUE_0 = 'Kept'
+	$env:GIT_TERMINAL_PROMPT = 'kept'
+	$Token = $BundleArguments.Clone()
+	$Token.Version = '1.3.2'
+	$null = Get-Annotations { $script:Other = New-DocsBundle @Token }
+	try
+	{
+		$CheckOutput = (& { try { & $PublishScript -CheckToken -Repository 'Example/docs' } catch { Write-Host $_.Exception.Message } } 6>&1 | Out-String)
+		$script:Caught = $null
+		$null = Get-Annotations { try { & $PublishScript -CheckToken -RemoteUrl 'file:///C:/no/such/docs.git' } catch { $script:Caught = $_.Exception.Message } }
+		$Output = (& { try { & $PublishScript -BundleDir $script:Other.Dir -Repository 'Example/docs' -WorkDir (Join-Paths $Temp 'docs-token') } catch { Write-Host $_.Exception.Message } } 6>&1 | Out-String)
+	}
+	finally
+	{
+		$Kept = ($env:GIT_CONFIG_COUNT -eq '1' -and $env:GIT_CONFIG_KEY_0 -eq 'user.name' -and $env:GIT_CONFIG_VALUE_0 -eq 'Kept' -and $env:GIT_TERMINAL_PROMPT -eq 'kept')
+		foreach ($Name in $Names) { [Environment]::SetEnvironmentVariable($Name, $Saved[$Name]) }
+	}
+	Check 'the token check passes when the token can read the docs' ($CheckOutput.Contains('docs-token can read main of Example/docs.')) $CheckOutput
+	Check 'and fails when it cannot, saying it may have expired' ($script:Caught -like '*may have expired*KHAOS_DOCS_TOKEN*') "$script:Caught"
+	Check 'with a token, the push lands' ($Output.Contains('Pushed the Sample 1.3.2 docs to Example/docs') -and (Get-RemoteLine @('log', '-1', '--format=%s', 'main')) -eq 'Sample 1.3.2 docs') $Output
+	Check 'the script puts back the git settings that carried the token' $Kept
+	$Inputs = @{ 'bundle-dir' = ''; token = 'not-a-real-token'; repository = 'Example/docs'; branch = 'main'; 'check-token' = 'true' }
+	$Step = Invoke-ActionStep (Join-Path $Root 'plugin/publish-docs') $Inputs @{ GIT_CONFIG_GLOBAL = $GlobalConfig; GCM_INTERACTIVE = 'never' }
+	Check 'the action checks the token as the package job runs it' ($Step.ExitCode -eq 0 -and ($Step.Output -join "`n").Contains('docs-token can read main of Example/docs.')) ($Step.Output -join "`n")
+
+	Write-Host 'Release script'
+	# gh as the release sees it: no tag or release yet, then the release it made.
+	$GhRelease = Join-Paths $Temp 'gh-release'
+	New-TestFile "$GhRelease\gh.cmd" ((@(
+		'@echo off'
+		'echo %*>>"%GH_STUB%\log.txt"'
+		'if "%1 %2"=="release view" goto view'
+		'if "%1 %2"=="release create" goto notes'
+		'if "%1 %2"=="release edit" goto notes'
+		'if "%1 %2"=="release upload" exit /b 0'
+		'if "%1"=="api" goto api'
+		'exit /b 1'
+		':view'
+		'if not exist "%GH_STUB%\body.md" exit /b 1'
+		'if "%6"=="--json" type "%GH_STUB%\body.md"'
+		'exit /b 0'
+		':notes'
+		'if "%~1"=="" exit /b 0'
+		'if "%~1"=="--notes-file" copy /y "%~2" "%GH_STUB%\body.md" >nul & exit /b 0'
+		'shift'
+		'goto notes'
+		':api'
+		'echo %2| findstr /c:"/git/ref/tags/" >nul && exit /b 1'
+		'echo %2| findstr /c:"/compare/" >nul && echo identical&& exit /b 0'
+		'echo %2| findstr /c:"/commits/" /c:"/git/ref/heads/" >nul && echo 0123456789abcdef0123456789abcdef01234567&& exit /b 0'
+		'echo false'
+		'exit /b 0'
+	) -join "`r`n") + "`r`n")
+	# The docs zip sits with the source zips, so the script has to tell them apart.
+	$Packages = Join-Paths $Temp 'release-dist'
+	foreach ($Engine in @('5.7', '5.8'))
+	{
+		New-TestFile "$Packages\Sample-1.2.3-UE$Engine.zip" "zip $Engine"
+		New-TestFile "$Packages\Sample-1.2.3-UE$Engine.zip.sha256" "sum $Engine"
+	}
+	Copy-Item $Zip $Packages
+	Copy-Item "$Zip.sha256" $Packages
+	$ReleaseDocs = Join-Paths $Packages 'SampleDocs-1.2.3-docs.zip'
+	$ReleaseScript = Join-Path $Root 'plugin/release/Publish-Release.ps1'
+	$GhLog = Join-Paths $GhRelease 'log.txt'
+	$Summary = Join-Paths $Temp 'release-summary.md'
+	$Saved = @{}
+	foreach ($Name in @('PATH', 'GH_STUB', 'GITHUB_STEP_SUMMARY')) { $Saved[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+	$env:PATH = "$GhRelease;$env:PATH"
+	$env:GH_STUB = $GhRelease
+	$env:GITHUB_STEP_SUMMARY = $Summary
+	try
+	{
+		$null = (& $ReleaseScript -PluginDir $Plugin -PackageDir $Packages -Tag 'v1.2.3' -Repository 'Example/SampleDocs' -Target $PluginHead -DocsZip $ReleaseDocs 6>&1 | Out-String)
+		$Created = @(Get-Content -LiteralPath $GhLog | Where-Object { $_ -like 'release create *' })
+		$Body = [IO.File]::ReadAllText((Join-Paths $GhRelease 'body.md'))
+		$SummaryText = [IO.File]::ReadAllText($Summary)
+
+		# A re-run with the same docs zip, then with one rebuilt to other bytes.
+		Remove-Item -LiteralPath $GhLog
+		$null = (& $ReleaseScript -PluginDir $Plugin -PackageDir $Packages -Tag 'v1.2.3' -Repository 'Example/SampleDocs' -Target $PluginHead -DocsZip $ReleaseDocs 6>&1 | Out-String)
+		$Same = @(Get-Content -LiteralPath $GhLog)
+		Remove-Item -LiteralPath $GhLog
+		$Rebuilt = Join-Paths $Temp 'release-docs' 'SampleDocs-1.2.3-docs.zip'
+		New-TestFile $Rebuilt 'other bytes'
+		New-TestFile "$Rebuilt.sha256" 'sum'
+		$null = (& $ReleaseScript -PluginDir $Plugin -PackageDir $Packages -Tag 'v1.2.3' -Repository 'Example/SampleDocs' -Target $PluginHead -DocsZip $Rebuilt 6>&1 | Out-String)
+		$Changed = @(Get-Content -LiteralPath $GhLog)
+		$RebuiltBody = [IO.File]::ReadAllText((Join-Paths $GhRelease 'body.md'))
+	}
+	finally
+	{
+		foreach ($Name in $Saved.Keys) { [Environment]::SetEnvironmentVariable($Name, $Saved[$Name]) }
+	}
+	# release create <tag> <assets> --repo ...
+	$Assets = @()
+	if ($Created.Count -eq 1)
+	{
+		$Tokens = $Created[0].Split(' ')
+		$Assets = @($Tokens[3..([Array]::IndexOf($Tokens, '--repo') - 1)] | ForEach-Object { [IO.Path]::GetFileName($_) })
+	}
+	Check 'a release gets the source zips, the docs zip and their checksums, and nothing else' (Same $Assets @('Sample-1.2.3-UE5.7.zip', 'Sample-1.2.3-UE5.8.zip', 'Sample-1.2.3-UE5.7.zip.sha256', 'Sample-1.2.3-UE5.8.zip.sha256', 'SampleDocs-1.2.3-docs.zip', 'SampleDocs-1.2.3-docs.zip.sha256')) ($Created -join "`n")
+	$Packaged = $Body.IndexOf('### Packages')
+	Check 'the notes put the docs after the packages, which list only the source zips' ($Packaged -ge 0 -and $Body.IndexOf('### Docs') -gt $Packaged -and @([regex]::Matches($Body, '(?m)^### Docs$')).Count -eq 1 -and $Body.Contains((Get-DocsReleaseNote $ReleaseDocs)) -and @([regex]::Matches($Body, '(?m)^\| `[^`]+` \| `[0-9a-f]{64}` \|$')).Count -eq 2 -and -not $Body.Contains('| `SampleDocs')) $Body
+	Check 'the Fab checklist lists only the source zips' (@([regex]::Matches($SummaryText, '(?m)^\| 5\.[78] \| https://github\.com/Example/SampleDocs/releases/download/v1\.2\.3/Sample-1\.2\.3-UE5\.[78]\.zip \|$')).Count -eq 2 -and -not $SummaryText.Contains('docs.zip')) $SummaryText
+	Check 'a re-run with the same docs zip uploads again and leaves the notes' (@($Same | Where-Object { $_ -like 'release upload v1.2.3 *--clobber' }).Count -eq 1 -and @($Same | Where-Object { $_ -like 'release edit *' }).Count -eq 0) ($Same -join "`n")
+	Check "a re-run with a rebuilt docs zip puts its checksum in the notes" (@($Changed | Where-Object { $_ -like 'release edit v1.2.3 *' }).Count -eq 1 -and $RebuiltBody.Contains("SHA-256 ``$(Get-FileSha256 $Rebuilt)``") -and -not $RebuiltBody.Contains((Get-FileSha256 $ReleaseDocs))) ($Changed -join "`n")
 
 	Write-Host 'Scripts'
 	foreach ($Script in Get-ChildItem $Root -Include '*.ps1', '*.psm1' -Recurse | Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' })

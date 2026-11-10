@@ -15,7 +15,7 @@ inputs:
     description: "'true' makes problems errors that fail the step. Otherwise they are warnings."
     default: 'false'
   private:
-    description: Whether the repository is private. Links to repository files outside the docs are then errors.
+    description: "Whether the repository is private. Then any link to a file that is not a page is an error: GitHub links into a private repository would 404."
     default: ${{ github.event.repository.private }}
   repository:
     description: owner/repo.
@@ -31,6 +31,9 @@ outputs:
   bundle-dir:
     description: The bundle, <out-dir>/<section>/<slug>/<version>. Empty when the plugin has no Content/Docs.
     value: ${{ steps.docs.outputs.bundle-dir }}
+  folder:
+    description: The bundle's <section>/<slug>/<version>, below out-dir. Empty when the plugin has no Content/Docs.
+    value: ${{ steps.docs.outputs.folder }}
   zip:
     description: The release's <Repo>-<version>-docs.zip, with a .sha256 beside it. Empty without a tag.
     value: ${{ steps.docs.outputs.zip }}

@@ -3,8 +3,8 @@ description: Push a docs bundle to KhaosSystems/docs-content, which docs.khaos.s
 
 inputs:
   bundle-dir:
-    description: The bundle's version folder, from the docs action.
-    required: true
+    description: The bundle's version folder, from the docs action. Needed unless check-token is 'true'.
+    default: ''
   token:
     description: Token with Contents read and write on the docs repository; the organization secret KHAOS_DOCS_TOKEN.
     required: true
@@ -14,6 +14,9 @@ inputs:
   branch:
     description: Branch the site is built from.
     default: main
+  check-token:
+    description: "'true' pushes nothing and only checks that the token can read the docs repository."
+    default: 'false'
 
 runs:
   using: composite
@@ -24,5 +27,6 @@ runs:
         BUNDLE_DIR: ${{ inputs.bundle-dir }}
         REPOSITORY: ${{ inputs.repository }}
         BRANCH: ${{ inputs.branch }}
+        CHECK_TOKEN: ${{ inputs.check-token }}
       run: |
-        & "$env:GITHUB_ACTION_PATH\Publish-Docs.ps1" -BundleDir $env:BUNDLE_DIR -Repository $env:REPOSITORY -Branch $env:BRANCH
+        & "$env:GITHUB_ACTION_PATH\Publish-Docs.ps1" -BundleDir $env:BUNDLE_DIR -Repository $env:REPOSITORY -Branch $env:BRANCH -CheckToken:($env:CHECK_TOKEN -eq 'true')
