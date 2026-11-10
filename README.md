@@ -109,8 +109,8 @@ To preview docs on the site, build a bundle from a checkout into the website's b
 .\plugin\docs\New-DocsBundle.ps1 -PluginDir ..\MyPlugin -OutDir ..\website\docs\src\content\bundles -EngineVersions 5.8
 ```
 
-It writes `unreal/<slug>/preview/` and prints any problems. If the site reads its bundles from the
-folder `DOCS_BUNDLES` names instead, point `-OutDir` there.
+It writes `unreal/<slug>/preview/` and prints any problems. If you set `DOCS_BUNDLES` for the site,
+use that folder as `-OutDir`. The website's `docs/README.md` has the details.
 
 ### Badges
 
