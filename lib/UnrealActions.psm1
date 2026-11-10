@@ -1214,6 +1214,7 @@ function Test-PluginPackage
 	# Copyright notices -----------------------------------------------------------------------
 
 	if (-not $CopyrightHolder) { $CopyrightHolder = Get-JsonValue $Json 'CreatedBy' }
+	$ExampleNotice = "// Copyright $((Get-Date).Year) $CopyrightHolder. All Rights Reserved."
 
 	foreach ($File in $Files)
 	{
@@ -1227,11 +1228,16 @@ function Test-PluginPackage
 
 		if ($FirstLine -notmatch '^\s*//.*\bCopyright\b')
 		{
-			& $Fail "The first line must be a copyright notice, e.g. '// Copyright $CopyrightHolder. All Rights Reserved.'" $File 1
+			& $Fail "The first line must be a copyright notice, e.g. '$ExampleNotice'" $File 1
 		}
 		elseif ($CopyrightHolder -and $FirstLine.IndexOf($CopyrightHolder, [StringComparison]::OrdinalIgnoreCase) -lt 0)
 		{
 			& $Fail "The copyright notice should name '$CopyrightHolder' (the descriptor's CreatedBy). Epic's own notice left in from a template is a common reason to be declined." $File 1
+		}
+		elseif ($FirstLine -notmatch '\b(19|20)\d\d\b')
+		{
+			# Fab's technical review fails a code file whose notice has no year of publishing.
+			& $Fail "The copyright notice needs the year of publishing, e.g. '$ExampleNotice'. Fab declines code files without it." $File 1
 		}
 	}
 
