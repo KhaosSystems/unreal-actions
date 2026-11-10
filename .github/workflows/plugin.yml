@@ -2,11 +2,13 @@
 # A plugin calls it from a short ci.yml; see README.md.
 #
 #   commits  GitHub-hosted. Pull requests and pushes: every commit message is a conventional commit.
-#   package  GitHub-hosted. Fab checks, then the source zip Fab is given, per engine version.
+#   package  GitHub-hosted. Fab checks, then the source zip Fab is given, per engine version. Also
+#            checks Content/Docs against the docs site's rules.
 #   build    Build machine. BuildPlugin on that zip, then the automation tests on the result.
 #   release  Once every engine passed, for a run with release set (the next version comes from the
 #            commit messages) or a pushed vX.Y.Z tag: GitHub release and tag, release branch, Fab
-#            checklist.
+#            checklist. With publish-docs, also the docs: zipped onto the release, then pushed to
+#            docs.khaos.systems.
 #   badges   On the default branch of a public repository: tests, engines and lines of code.
 #   notify   Optional Discord message for releases and failures.
 #
@@ -41,6 +43,10 @@ on:
         description: Release the next version, worked out from the commit messages since the last release. Default branch only.
         type: boolean
         default: false
+      publish-docs:
+        description: Publish Content/Docs to docs.khaos.systems with each release, and fail any run whose docs break the site's rules. Needs docs-token.
+        type: boolean
+        default: false
       vendor-to:
         description: Deprecated and ignored. Games now pull private plugin releases themselves with game/update-plugin.
         type: string
@@ -48,6 +54,9 @@ on:
     secrets:
       discord-webhook-url:
         description: Discord webhook for release and failure notices. Optional.
+        required: false
+      docs-token:
+        description: The organization secret KHAOS_DOCS_TOKEN, which can push to KhaosSystems/docs-content. Needed with publish-docs.
         required: false
       vendor-token:
         description: Deprecated and ignored, with vendor-to.
@@ -125,12 +134,35 @@ jobs:
         shell: powershell
         run: Write-Host '::warning title=vendor-to is deprecated::Plugin releases no longer push to games. Remove vendor-to and vendor-token from ci.yml; games pull releases with KhaosSystems/unreal-actions/game/update-plugin.'
 
+      # Here rather than in the release job, so a release without the token fails before the build.
+      # Only whether it is set reaches this step, not the token.
+      - name: Docs token
+        if: inputs.publish-docs
+        shell: powershell
+        env:
+          HAS_TOKEN: ${{ secrets.docs-token != '' }}
+          RELEASE: ${{ steps.kind.outputs.release }}
+        run: |
+          if ($env:HAS_TOKEN -eq 'true') { exit 0 }
+          $Message = 'publish-docs is on, but docs-token is not set. In ci.yml, pass the organization secret KHAOS_DOCS_TOKEN as docs-token.'
+          if ($env:RELEASE -eq 'true') { Write-Host "::error title=No docs token::$Message"; exit 1 }
+          Write-Host "::warning title=No docs token::$Message Releases fail without it."
+
       - id: package
         uses: KhaosSystems/unreal-actions/plugin/package@v1
         with:
           plugin-dir: plugin
           engine-versions: ${{ inputs.engine-versions }}
           version: ${{ steps.kind.outputs.tag }}
+
+      # Every run, so problems show long before a release: errors with publish-docs, else warnings.
+      - name: Check docs
+        uses: KhaosSystems/unreal-actions/plugin/docs@v1
+        with:
+          plugin-dir: plugin
+          engine-versions: ${{ inputs.engine-versions }}
+          strict: ${{ inputs.publish-docs }}
+          private: ${{ github.event.repository.private }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -227,6 +259,19 @@ jobs:
           name: source-packages
           path: dist
 
+      # Built from the commit being released and checked before anything is published, so a docs
+      # problem stops the release instead of leaving it half done.
+      - id: docs
+        if: inputs.publish-docs
+        uses: KhaosSystems/unreal-actions/plugin/docs@v1
+        with:
+          plugin-dir: plugin
+          engine-versions: ${{ inputs.engine-versions }}
+          tag: ${{ needs.package.outputs.tag }}
+          strict: 'true'
+          private: ${{ github.event.repository.private }}
+          out-dir: docs-dist
+
       - id: release
         uses: KhaosSystems/unreal-actions/plugin/release@v1
         with:
@@ -234,6 +279,17 @@ jobs:
           packages-dir: dist
           tag: ${{ needs.package.outputs.tag }}
           target: ${{ github.sha }}
+          docs-zip: ${{ steps.docs.outputs.zip }}
+
+      # Last, and the only step that sees the token. If it fails, the release already exists: re-run
+      # the failed jobs. The rebuilt bundle is identical, the release is updated in place and the push
+      # replaces only this version's folder.
+      - name: Publish docs
+        if: inputs.publish-docs
+        uses: KhaosSystems/unreal-actions/plugin/publish-docs@v1
+        with:
+          bundle-dir: ${{ steps.docs.outputs.bundle-dir }}
+          token: ${{ secrets.docs-token }}
 
   badges:
     name: Badges

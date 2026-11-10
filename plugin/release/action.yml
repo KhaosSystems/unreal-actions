@@ -20,6 +20,9 @@ inputs:
   token:
     description: Token that can create releases and push branches.
     default: ${{ github.token }}
+  docs-zip:
+    description: The docs zip from the docs action, attached with its .sha256 but kept out of the Fab checklist. Empty for none.
+    default: ''
 
 outputs:
   url:
@@ -38,5 +41,6 @@ runs:
         TAG: ${{ inputs.tag }}
         TARGET: ${{ inputs.target }}
         REPOSITORY: ${{ inputs.repository }}
+        DOCS_ZIP: ${{ inputs.docs-zip }}
       run: |
-        & "$env:GITHUB_ACTION_PATH\Publish-Release.ps1" -PluginDir $env:PLUGIN_DIR -PackageDir $env:PACKAGES_DIR -Tag $env:TAG -Repository $env:REPOSITORY -Target $env:TARGET
+        & "$env:GITHUB_ACTION_PATH\Publish-Release.ps1" -PluginDir $env:PLUGIN_DIR -PackageDir $env:PACKAGES_DIR -Tag $env:TAG -Repository $env:REPOSITORY -Target $env:TARGET -DocsZip $env:DOCS_ZIP

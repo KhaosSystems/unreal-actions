@@ -1,0 +1,53 @@
+name: Unreal plugin docs
+description: Build a plugin's Content/Docs into a bundle for docs.khaos.systems and check it against the site's rules. For a release, also zip it.
+
+inputs:
+  plugin-dir:
+    description: Folder holding the .uplugin.
+    default: .
+  engine-versions:
+    description: Engine versions, as a JSON array or comma list, recorded in the bundle.
+    default: ''
+  tag:
+    description: Release tag, vX.Y.Z. Empty builds a preview bundle, to check the docs.
+    default: ''
+  strict:
+    description: "'true' makes problems errors that fail the step. Otherwise they are warnings."
+    default: 'false'
+  private:
+    description: Whether the repository is private. Links to repository files outside the docs are then errors.
+    default: ${{ github.event.repository.private }}
+  repository:
+    description: owner/repo.
+    default: ${{ github.repository }}
+  out-dir:
+    description: Where the bundle, and for a release its zip, are written.
+    default: docs-bundle
+  token:
+    description: Token that can read the repository's releases, so a re-run keeps the release's date.
+    default: ${{ github.token }}
+
+outputs:
+  bundle-dir:
+    description: The bundle, <out-dir>/<section>/<slug>/<version>. Empty when the plugin has no Content/Docs.
+    value: ${{ steps.docs.outputs.bundle-dir }}
+  zip:
+    description: The release's <Repo>-<version>-docs.zip, with a .sha256 beside it. Empty without a tag.
+    value: ${{ steps.docs.outputs.zip }}
+
+runs:
+  using: composite
+  steps:
+    - id: docs
+      shell: powershell
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PLUGIN_DIR: ${{ inputs.plugin-dir }}
+        ENGINE_VERSIONS: ${{ inputs.engine-versions }}
+        TAG: ${{ inputs.tag }}
+        STRICT: ${{ inputs.strict }}
+        PRIVATE: ${{ inputs.private }}
+        REPOSITORY: ${{ inputs.repository }}
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH\New-DocsBundle.ps1" -PluginDir $env:PLUGIN_DIR -OutDir $env:OUT_DIR -EngineVersions $env:ENGINE_VERSIONS -Tag $env:TAG -Repository $env:REPOSITORY -Private:($env:PRIVATE -eq 'true') -Strict:($env:STRICT -eq 'true')

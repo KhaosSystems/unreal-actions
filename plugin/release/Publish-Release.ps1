@@ -16,6 +16,9 @@ The tag is created with the release when it does not exist yet, as for a version
 the commit messages; give the commit with -Target. Re-running a release replaces the zips on the
 existing release rather than failing.
 
+A docs zip, given with -DocsZip, is attached too, but kept out of the package table and the Fab
+checklist: only <Plugin>-<version>-UE<engine>.zip files are packages.
+
 .EXAMPLE
 ./Publish-Release.ps1 -PluginDir ./plugin -PackageDir ./dist -Tag v1.2.0 -Repository my-org/MyPlugin
 #>
@@ -28,7 +31,10 @@ param(
 	[Parameter(Mandatory)][string]$Repository,
 
 	# The commit to tag, when the tag does not exist yet.
-	[string]$Target
+	[string]$Target,
+
+	# The release's docs zip, with its .sha256 beside it.
+	[string]$DocsZip
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,8 +42,9 @@ Import-Module (Join-Path $PSScriptRoot '../../lib/UnrealActions.psm1') -Force
 
 $Descriptor = Get-PluginDescriptor $PluginDir
 $Release = ConvertFrom-ReleaseVersion $Tag
-$Zips = @(Get-ChildItem -LiteralPath $PackageDir -Filter '*.zip' | Sort-Object Name)
-if ($Zips.Count -eq 0) { throw "No zips in $PackageDir." }
+$Zips = @(Get-ChildItem -LiteralPath $PackageDir -Filter '*.zip' | Where-Object { Get-PackageEngineVersion $_.Name } | Sort-Object Name)
+if ($Zips.Count -eq 0) { throw "No source zips (<Plugin>-<version>-UE<engine>.zip) in $PackageDir." }
+if ($DocsZip -and -not (Test-Path -LiteralPath "$DocsZip.sha256")) { throw "$DocsZip.sha256 is missing; the docs zip goes on the release with its checksum." }
 
 $TagExists = (Invoke-NativeQuiet gh @('api', "repos/$Repository/git/ref/tags/$Tag")).ExitCode -eq 0
 if (-not $TagExists -and -not $Target) { throw "Tag $Tag does not exist; give the commit to release with -Target." }
@@ -59,14 +66,26 @@ $Body = @(
 	'Source packages as submitted to Fab, one per engine version. Each was compiled with BuildPlugin and tested against that engine before this release was made.'
 	''
 	$Checksums
-) -join "`n"
+)
+# After the packages, so game/update-plugin, which keeps the notes above them, leaves it out too.
+if ($DocsZip)
+{
+	$Body += @(
+		''
+		'### Docs'
+		''
+		"``$([IO.Path]::GetFileName($DocsZip))``: this version's docs bundle for docs.khaos.systems, not a Fab package. SHA-256 ``$(Get-FileSha256 $DocsZip)``."
+	)
+}
+$Body = $Body -join "`n"
 $NotesFile = Join-Paths ([IO.Path]::GetTempPath()) "release-notes-$Tag.md"
 Write-Utf8File $NotesFile $Body
 
 # Create, or refresh on a re-run ----------------------------------------------------------------
 
 $Assets = @($Zips | ForEach-Object { $_.FullName })
-$Assets += @(Get-ChildItem -LiteralPath $PackageDir -Filter '*.sha256' | ForEach-Object { $_.FullName })
+$Assets += @($Zips | ForEach-Object { "$($_.FullName).sha256" } | Where-Object { Test-Path -LiteralPath $_ })
+if ($DocsZip) { $Assets += @($DocsZip, "$DocsZip.sha256") }
 
 if ((Invoke-NativeQuiet gh @('release', 'view', $Tag, '--repo', $Repository)).ExitCode -eq 0)
 {
@@ -143,7 +162,7 @@ $Summary += '| Engine | Project file link |'
 $Summary += '| --- | --- |'
 foreach ($Zip in $Zips)
 {
-	$Engine = [regex]::Match($Zip.Name, 'UE(\d+\.\d+)\.zip$').Groups[1].Value
+	$Engine = Get-PackageEngineVersion $Zip.Name
 	$Url = "https://github.com/$Repository/releases/download/$Tag/$($Zip.Name)"
 	$Summary += "| $Engine | $Url |"
 }
