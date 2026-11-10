@@ -14,7 +14,7 @@ hosting elsewhere before Fab can fetch them.
 
 The tag is created with the release when it does not exist yet, as for a version worked out from
 the commit messages; give the commit with -Target. Re-running a release replaces the zips on the
-existing release rather than failing.
+existing release rather than failing, and refreshes the docs zip's checksum in its notes.
 
 A docs zip, given with -DocsZip, is attached too, but kept out of the package table and the Fab
 checklist: only <Plugin>-<version>-UE<engine>.zip files are packages.
@@ -68,14 +68,11 @@ $Body = @(
 	$Checksums
 )
 # After the packages, so game/update-plugin, which keeps the notes above them, leaves it out too.
+$DocsNote = $null
 if ($DocsZip)
 {
-	$Body += @(
-		''
-		'### Docs'
-		''
-		"``$([IO.Path]::GetFileName($DocsZip))``: this version's docs bundle for docs.khaos.systems, not a Fab package. SHA-256 ``$(Get-FileSha256 $DocsZip)``."
-	)
+	$DocsNote = Get-DocsReleaseNote $DocsZip
+	$Body += @('', $DocsNote)
 }
 $Body = $Body -join "`n"
 $NotesFile = Join-Paths ([IO.Path]::GetTempPath()) "release-notes-$Tag.md"
@@ -92,6 +89,21 @@ if ((Invoke-NativeQuiet gh @('release', 'view', $Tag, '--repo', $Repository)).Ex
 	Write-Host "Release $Tag exists; replacing its packages."
 	& gh release upload $Tag @Assets --repo $Repository --clobber
 	if ($LASTEXITCODE -ne 0) { throw "Uploading to release $Tag failed." }
+
+	# A re-run can rebuild the docs zip with other bytes, such as another date; keep its checksum right.
+	if ($DocsNote)
+	{
+		$Notes = Invoke-NativeQuiet gh @('release', 'view', $Tag, '--repo', $Repository, '--json', 'body', '--jq', '.body')
+		if ($Notes.ExitCode -ne 0) { throw "Reading the notes of release $Tag failed." }
+		$Current = $Notes.Output -join "`n"
+		$Updated = Set-DocsReleaseNote $Current $DocsNote
+		if ($Updated -cne $Current)
+		{
+			Write-Utf8File $NotesFile $Updated
+			& gh release edit $Tag --repo $Repository --notes-file $NotesFile
+			if ($LASTEXITCODE -ne 0) { throw "Updating the docs checksum in release $Tag failed." }
+		}
+	}
 }
 else
 {

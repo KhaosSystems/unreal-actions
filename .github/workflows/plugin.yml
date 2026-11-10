@@ -135,9 +135,10 @@ jobs:
         run: Write-Host '::warning title=vendor-to is deprecated::Plugin releases no longer push to games. Remove vendor-to and vendor-token from ci.yml; games pull releases with KhaosSystems/unreal-actions/game/update-plugin.'
 
       # Here rather than in the release job, so a release without the token fails before the build.
-      # Only whether it is set reaches this step, not the token.
+      # Only whether it is set reaches this step, not the token. Pull requests from forks and
+      # Dependabot get no secrets, so they are not warned.
       - name: Docs token
-        if: inputs.publish-docs
+        if: inputs.publish-docs && !github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]'
         shell: powershell
         env:
           HAS_TOKEN: ${{ secrets.docs-token != '' }}
@@ -282,8 +283,8 @@ jobs:
           docs-zip: ${{ steps.docs.outputs.zip }}
 
       # Last, and the only step that sees the token. If it fails, the release already exists: re-run
-      # the failed jobs. The rebuilt bundle is identical, the release is updated in place and the push
-      # replaces only this version's folder.
+      # the failed jobs. The bundle is rebuilt with the release's date, the release is updated in
+      # place and the push replaces only this version's folder.
       - name: Publish docs
         if: inputs.publish-docs
         uses: KhaosSystems/unreal-actions/plugin/publish-docs@v1

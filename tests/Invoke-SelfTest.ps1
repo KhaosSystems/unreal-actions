@@ -97,8 +97,55 @@ function Get-Annotations([scriptblock]$Script)
 
 <#
 .SYNOPSIS
+Run an action's run: script the way a `shell: powershell` step does: in a new Windows PowerShell,
+after $ErrorActionPreference = 'stop', and ending with exit $LASTEXITCODE.
+
+.PARAMETER Inputs
+The action's inputs by name. Each env: entry set from an input gets its value.
+
+.OUTPUTS
+ExitCode and Output, as from Invoke-NativeQuiet.
+#>
+function Invoke-ActionStep([string]$ActionDir, [hashtable]$Inputs, [hashtable]$Environment = @{})
+{
+	$Variables = @{ GITHUB_ACTION_PATH = $ActionDir }
+	foreach ($Name in $Environment.Keys) { $Variables[$Name] = $Environment[$Name] }
+	$Run = New-Object System.Collections.Generic.List[string]
+	$Block = -1
+	foreach ($Line in [IO.File]::ReadAllLines((Join-Path $ActionDir 'action.yml')))
+	{
+		$Indent = $Line.Length - $Line.TrimStart().Length
+		if ($Block -ge 0)
+		{
+			if ($Line.Trim() -and $Indent -le $Block) { break }
+			$Run.Add($Line.TrimStart())
+			continue
+		}
+		$Variable = [regex]::Match($Line, '^\s+([A-Z_]+): \$\{\{ inputs\.([a-z-]+) \}\}\s*$')
+		if ($Variable.Success) { $Variables[$Variable.Groups[1].Value] = [string]$Inputs[$Variable.Groups[2].Value] }
+		if ($Line -match '^\s*run: \|\s*$') { $Block = $Indent }
+	}
+
+	$File = Join-Paths $Temp ('step-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.ps1')
+	Write-Utf8File $File ("`$ErrorActionPreference = 'stop'`n" + ($Run -join "`n") + "`nif ((Test-Path -LiteralPath variable:\LASTEXITCODE)) { exit `$LASTEXITCODE }`n")
+	$Saved = @{}
+	foreach ($Name in $Variables.Keys)
+	{
+		$Saved[$Name] = [Environment]::GetEnvironmentVariable($Name)
+		[Environment]::SetEnvironmentVariable($Name, $Variables[$Name])
+	}
+	try { return Invoke-NativeQuiet 'powershell.exe' @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ". '$File'") }
+	finally
+	{
+		foreach ($Name in $Saved.Keys) { [Environment]::SetEnvironmentVariable($Name, $Saved[$Name]) }
+	}
+}
+
+<#
+.SYNOPSIS
 The sample plugin with docs that pass every rule: a landing page with CRLF line endings, a page in
-a folder, an image, a text file the bundle leaves out, and junk it skips silently.
+a folder, an image, an SVG with CRLF line endings, a text file the bundle leaves out, and junk it
+skips silently.
 #>
 function New-DocsFixture([string]$Dir)
 {
@@ -147,6 +194,7 @@ function New-DocsFixture([string]$Dir)
 	# With a byte order mark, as Visual Studio saves it.
 	[IO.File]::WriteAllText("$Dir\Content\Docs\Guides\Setup.md", "# Setup`n`n## Install`n`nBack to [Sample](../Sample.md), with its ![shot](../Images/Shot.png).`n", (New-Object System.Text.UTF8Encoding $true))
 	New-TestFile "$Dir\Content\Docs\Images\Shot.png" 'png'
+	New-TestFile "$Dir\Content\Docs\Images\Logo.svg" "<svg xmlns='http://www.w3.org/2000/svg'>`r`n</svg>`r`n"
 	New-TestFile "$Dir\Content\Docs\Images\Thumbs.db" 'junk'
 	New-TestFile "$Dir\Content\Docs\Notes.txt" 'notes'
 }
@@ -162,6 +210,14 @@ function Test-Fixture([string]$Dir)
 
 $Temp = Join-Paths ([IO.Path]::GetTempPath()) ('kpci-selftest-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 $Plugin = Join-Paths $Temp 'Sample'
+
+# The scripts under test write to these. In the self-test job they are the job's own.
+$CiFiles = @{}
+foreach ($Name in @('GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY'))
+{
+	$CiFiles[$Name] = [Environment]::GetEnvironmentVariable($Name)
+	[Environment]::SetEnvironmentVariable($Name, $null)
+}
 
 try
 {
@@ -597,6 +653,7 @@ try
 	Write-Host 'Docs bundles'
 	Check 'slugs are kebab-case' ((ConvertTo-KebabCase 'KhaosFolderIcons') -eq 'khaos-folder-icons' -and (ConvertTo-KebabCase 'UIWidgets') -eq 'ui-widgets' -and (ConvertTo-KebabCase 'Khaos Docs 2') -eq 'khaos-docs-2')
 	Check "glyphs leave out the maker's name" ((Get-DocsGlyph 'Khaos Palette' 'Khaos Systems') -eq 'PA' -and (Get-DocsGlyph 'Khaos Folder Icons' 'Khaos Systems') -eq 'FI' -and (Get-DocsGlyph 'Sample' 'Example Studio') -eq 'SA')
+	Check 'page URLs are kebab-case paths, the landing page at the root' ((Get-DocsPagePath 'Sample.md' 'Sample.md').Path -eq '' -and (Get-DocsPagePath 'Guides/First Steps.md' 'Sample.md').Path -eq 'guides/first-steps/')
 
 	$Commit = '0123456789abcdef0123456789abcdef01234567'
 	$DocsOut = Join-Paths $Temp 'docs-out'
@@ -606,9 +663,9 @@ try
 	$Annotations = @(Get-Annotations { $script:Bundle = New-DocsBundle @BundleArguments })
 	$Bundle = $script:Bundle
 	Check 'the bundle goes in section/slug/version, the slug from the repository name' ($Bundle.Folder -eq 'unreal/sample-docs/1.2.3' -and $Bundle.Dir -eq (Join-Paths $DocsOut 'unreal' 'sample-docs' '1.2.3'))
-	Check 'pages and images keep their paths' (Same $Bundle.Files @('Guides/Setup.md', 'Images/Shot.png', 'Sample.md', 'docs.json')) ($Bundle.Files -join ', ')
+	Check 'pages and images keep their paths' (Same $Bundle.Files @('Guides/Setup.md', 'Images/Logo.svg', 'Images/Shot.png', 'Sample.md', 'docs.json')) ($Bundle.Files -join ', ')
 	Check 'a file of another type is left out with a warning' ($Annotations.Count -eq 1 -and $Annotations[0] -like '::warning file=Content/Docs/Notes.txt,title=Docs::*.txt*') ($Annotations -join "`n")
-	Check 'Markdown gets LF line endings' ([Array]::IndexOf([IO.File]::ReadAllBytes("$($Bundle.Dir)\Sample.md"), [byte]13) -lt 0)
+	Check 'Markdown and SVG get LF line endings' ([Array]::IndexOf([IO.File]::ReadAllBytes("$($Bundle.Dir)\Sample.md"), [byte]13) -lt 0 -and [Array]::IndexOf([IO.File]::ReadAllBytes("$($Bundle.Dir)\Images\Logo.svg"), [byte]13) -lt 0)
 	Check 'Markdown loses its byte order mark' ([IO.File]::ReadAllBytes("$($Bundle.Dir)\Guides\Setup.md")[0] -eq [byte][char]'#')
 
 	$Golden = @'
@@ -663,6 +720,12 @@ try
 	$Zip = New-DocsBundleZip -BundleDir $Bundle.Dir -OutDir "$Temp\docs-zip"
 	Check 'the same docs give the same bundle, byte for byte' ((Same @($Bundle.Files | ForEach-Object { Get-FileSha256 (Join-Paths $Bundle.Dir $_) }) $Hashes) -and (Get-FileSha256 $Zip) -eq $ZipHash)
 
+	$Note = Get-DocsReleaseNote $Zip
+	Check 'the release notes give the docs zip its checksum' ($Note -ceq "### Docs`n`n``SampleDocs-1.2.3-docs.zip``: this version's docs bundle for docs.khaos.systems, not a Fab package. SHA-256 ``$ZipHash``.")
+	Check 'notes without a docs section get one at the end' ((Set-DocsReleaseNote "Notes`n`n### Packages`n`n| a |`n" $Note) -ceq "Notes`n`n### Packages`n`n| a |`n`n$Note")
+	Check 'a docs section is replaced where it is' ((Set-DocsReleaseNote "Notes`r`n`r`n### Docs`r`n`r`nold`r`n`r`n### Later`r`n`r`nkept" $Note) -ceq "Notes`n`n$Note`n`n### Later`n`nkept")
+	Check 'notes with this docs section stay as they are' ((Set-DocsReleaseNote "Notes`n`n$Note" $Note) -ceq "Notes`n`n$Note")
+
 	$Short = $BundleArguments.Clone()
 	$Short.Commit = 'abc123'
 	$script:Caught = $null
@@ -688,39 +751,85 @@ try
 	$null = Get-Annotations { $script:Other = New-DocsBundle -PluginDir $Store -OutDir "$Temp\docs-store-out" -Ref 'main' -Commit $Commit -Repo 'Example/Store' -Released '2026-11-09' }
 	Check 'fabUrl falls back to MarketplaceURL' ($script:Other.Manifest.fabUrl -eq 'https://example.com/market')
 
+	# What a Windows editor or shell may save, and a SupportURL that is no URL.
+	$Edge = Join-Paths $Temp 'docs-edge'
+	New-DocsFixture $Edge
+	$Path = "$Edge\Sample.uplugin"
+	[IO.File]::WriteAllText($Path, (Set-DescriptorField ([IO.File]::ReadAllText($Path)) 'SupportURL' 'support@example.com'))
+	New-TestFile "$Edge\Content\Docs\Upper.MD" "# Upper`n"
+	[IO.File]::WriteAllText("$Edge\Content\Docs\Wide.md", "# Wide`r`n`r`nCaf$([char]0xE9).`r`n", (New-Object System.Text.UnicodeEncoding $false, $true))
+	New-TestFile "$Edge\Content\Docs\Mac.md" "# Mac`r`rOld line endings.`r"
+	$script:Other = $null
+	$Annotations = @(Get-Annotations { $script:Other = New-DocsBundle -PluginDir $Edge -OutDir "$Temp\docs-edge-out" -Ref 'main' -Commit $Commit -Repo 'Example/Edge' -Released '2026-11-09' })
+	Check 'a SupportURL that is not an http(s) URL is left out, with a warning' ($null -eq $script:Other.Manifest.supportUrl -and @($Annotations | Where-Object { $_ -like '::warning file=Sample.uplugin,title=Docs::SupportURL is not an http(s) URL*' }).Count -eq 1) ($Annotations -join "`n")
+	Check 'a page ending in .MD is left out, with a warning' ((Same $script:Other.Files @('Guides/Setup.md', 'Images/Logo.svg', 'Images/Shot.png', 'Mac.md', 'Sample.md', 'Wide.md', 'docs.json')) -and @($Annotations | Where-Object { $_ -like '::warning file=Content/Docs/Upper.MD,title=Docs::*in lowercase*' }).Count -eq 1) ($Annotations -join "`n")
+	Check 'a UTF-16 page becomes UTF-8' (Same ([IO.File]::ReadAllBytes("$($script:Other.Dir)\Wide.md")) ((New-Object System.Text.UTF8Encoding $false).GetBytes("# Wide`n`nCaf$([char]0xE9).`n")))
+	Check 'CR line endings become LF' ([IO.File]::ReadAllText("$($script:Other.Dir)\Mac.md") -ceq "# Mac`n`nOld line endings.`n")
+	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $script:Other.Dir }
+	Check 'and then they pass' ($Annotations.Count -eq 0) ($Annotations -join "`n")
+
 	Write-Host 'Docs rules'
 	$script:Result = $null
 	$Annotations = Get-Annotations { $script:Result = Test-DocsBundle -BundleDir $Bundle.Dir }
 	Check 'the sample docs pass every rule' ($Annotations.Count -eq 0 -and $script:Result.Errors -eq 0) ($Annotations -join "`n")
 
+	# A private repository's docs: the sample without its link to a source file.
+	$PrivatePlugin = Join-Paths $Temp 'docs-private-src'
+	New-DocsFixture $PrivatePlugin
+	$Page = "$PrivatePlugin\Content\Docs\Sample.md"
+	[IO.File]::WriteAllText($Page, [IO.File]::ReadAllText($Page).Replace('[the source](../../Source/SampleEditor/Private/SampleEditor.cpp), ', ''))
 	$PrivateArguments = $BundleArguments.Clone()
+	$PrivateArguments.PluginDir = $PrivatePlugin
 	$PrivateArguments.OutDir = Join-Paths $Temp 'docs-private'
 	$PrivateArguments.Private = $true
 	$script:PrivateBundle = $null
 	$null = Get-Annotations { $script:PrivateBundle = New-DocsBundle @PrivateArguments }
+	$script:Result = $null
+	$Annotations = Get-Annotations { $script:Result = Test-DocsBundle -BundleDir $script:PrivateBundle.Dir }
+	Check "a private repository's docs pass, with page links, anchors, images and a reference" ($Annotations.Count -eq 0 -and $script:Result.Errors -eq 0 -and $script:PrivateBundle.Manifest.private) ($Annotations -join "`n")
 
 	$Rules = @(
 		@{ Name = 'a page without an H1'; Text = "Intro.`n`n## Part`n"; Line = 1; Expect = 'No H1' }
 		@{ Name = 'a second H1'; Text = "# One`n`n# Two`n"; Line = 3; Expect = 'More than one H1' }
 		@{ Name = 'a second H1, underlined'; Text = "# One`n`nTwo`n===`n"; Line = 3; Expect = 'More than one H1' }
 		@{ Name = 'a second H1, in a list item'; Text = "# One`n`n- # Two`n"; Line = 3; Expect = 'More than one H1' }
+		@{ Name = 'a second H1, underlined in a list item'; Text = "# One`n`n- Two`n  ===`n"; Line = 3; Expect = 'More than one H1' }
+		@{ Name = 'a second H1, in a quote'; Text = "# One`n`n> # Two`n"; Line = 3; Expect = 'More than one H1' }
 		@{ Name = 'content before the H1'; Text = "![Logo](Images/Shot.png)`n`n# Title`n"; Line = 1; Expect = 'must come first' }
+		@{ Name = 'a definition before the H1'; Text = "[home]: Sample.md`n`n# Title`n`nSee [home].`n"; Line = 1; Expect = 'must come first' }
+		@{ Name = 'a footnote before the H1'; Text = "[^1]: A note.`n`n# Title`n"; Line = 1; Expect = 'must come first' }
+		@{ Name = 'an H1 in a list item'; Text = "- # Title`n`nText.`n"; Line = 1; Expect = 'inside a quote, list item or footnote' }
+		@{ Name = 'an H1 in a quote'; Text = "> # Title`n`nText.`n"; Line = 1; Expect = 'inside a quote, list item or footnote' }
 		@{ Name = 'a skipped heading level'; Text = "# Title`n`n### Deep`n"; Line = 3; Expect = 'skips a level, H1 to H3' }
 		@{ Name = 'raw HTML'; Text = "# Title`n`nA line<br>break.`n"; Line = 3; Expect = 'Raw HTML is not allowed: <br>' }
 		@{ Name = 'an HTML block'; Text = "# Title`n`n<details>`n<summary>More</summary>`n</details>`n"; Line = 3; Expect = 'Raw HTML' }
+		@{ Name = 'an HTML block start with no end'; Text = "# Title`n`n<div`n"; Line = 3; Expect = 'Raw HTML is not allowed: <div' }
 		@{ Name = 'an HTML comment'; Text = "# Title`n`n<!-- note -->`n"; Line = 3; Expect = 'Raw HTML' }
 		@{ Name = 'a C++ type outside backticks'; Text = "# Title`n`nTakes a TArray<FString>.`n"; Line = 3; Expect = 'Raw HTML' }
+		@{ Name = 'a C++ type in a heading'; Text = "# Title`n`n## Using TArray<FString>`n"; Line = 3; Expect = 'Raw HTML is not allowed: <FString>' }
+		@{ Name = 'raw HTML before an autolink'; Text = "# Title`n`nMail <!x@example.com>.`n"; Line = 3; Expect = 'Raw HTML' }
+		@{ Name = 'raw HTML after a label that is no definition'; Text = "# Title`n`n[Optional]: <b>bold</b>`n"; Line = 3; Expect = 'Raw HTML is not allowed: <b>' }
 		@{ Name = 'a broken link'; Text = "# Title`n`nSee [it](Missing.md).`n"; Line = 3; Expect = 'is broken' }
 		@{ Name = 'a broken link on a later line of a paragraph'; Text = "# Title`n`nOne`ntwo [it](Missing.md#part)`n"; Line = 4; Expect = 'is broken' }
+		@{ Name = 'a broken link in a heading'; Text = "# Title`n`n## See [it](Missing.md)`n"; Line = 3; Expect = 'is broken' }
+		@{ Name = 'a broken link after a label that is no definition'; Text = "# Title`n`n[Required]: The asset, see [it](Missing.md).`n"; Line = 3; Expect = 'is broken' }
+		@{ Name = 'a broken link in a footnote'; Text = "# Title`n`nText[^1].`n`n[^1]: See [it](Missing.md).`n"; Line = 5; Expect = 'is broken' }
+		@{ Name = 'a broken link in the second paragraph of a footnote'; Text = "# Title`n`nText[^1].`n`n[^1]: A note.`n`n    See [it](Missing.md).`n"; Line = 7; Expect = 'is broken' }
 		@{ Name = 'a broken reference link'; Text = "# Title`n`nSee [it][x].`n`n[x]: Missing.md`n"; Line = 5; Expect = 'is broken' }
+		@{ Name = 'a definition with its destination on the next line'; Text = "# Title`n`nSee [it][x].`n`n[x]:`n  Missing.md`n"; Line = 5; Expect = 'is broken' }
+		@{ Name = 'a definition in a quote'; Text = "# Title`n`n> See [it][x].`n>`n> [x]: Missing.md`n"; Line = 5; Expect = 'is broken' }
+		@{ Name = 'a definition in a list item'; Text = "# Title`n`n- [x]: Missing.md`n"; Line = 3; Expect = 'is broken' }
 		@{ Name = 'a link with the wrong case'; Text = "# Title`n`nSee [setup](guides/setup.md).`n"; Line = 3; Expect = 'wrong case: the file is Guides/Setup.md' }
+		@{ Name = 'an image with the wrong case'; Text = "# Title`n`n![Shot](images/shot.png)`n"; Line = 3; Expect = 'wrong case: the file is Images/Shot.png' }
 		@{ Name = 'a remote image'; Text = "# Title`n`n![Shot](https://example.com/shot.png)`n"; Line = 3; Expect = 'loads no remote images' }
 		@{ Name = 'a remote image by reference'; Text = "# Title`n`n![Shot][s]`n`n[s]: https://example.com/shot.png`n"; Line = 5; Expect = 'loads no remote images' }
 		@{ Name = 'a remote image inside a link'; Text = "# Title`n`n[![b](https://example.com/b.svg)](https://example.com)`n"; Line = 3; Expect = 'loads no remote images' }
+		@{ Name = 'a root-relative image'; Text = "# Title`n`n![Shot](/Images/Shot.png)`n"; Line = 3; Expect = 'is root-relative. Write it relative to this page.' }
 		@{ Name = 'an image outside the bundle'; Text = "# Title`n`n![Icon](../../Resources/Icon128.png)`n"; Line = 3; Expect = 'outside the docs folder' }
 		@{ Name = 'a missing image'; Text = "# Title`n`n![Shot](Images/None.png)`n"; Line = 3; Expect = 'is broken' }
 		@{ Name = 'a root-relative link'; Text = "# Title`n`nSee [the docs](/unreal/sample-docs/).`n"; Line = 3; Expect = 'root-relative' }
-		@{ Name = 'a link of another scheme'; Text = "# Title`n`nSee [files](ftp://example.com/x).`n"; Line = 3; Expect = 'only http(s), mailto' }
+		@{ Name = 'a link of another scheme'; Text = "# Title`n`nSee [files](ftp://example.com/x).`n"; Line = 3; Expect = 'only http(s), mailto, #anchor and relative links' }
+		@{ Name = 'an autolink of another scheme'; Text = "# Title`n`nSee <ftp://example.com/x>.`n"; Line = 3; Expect = 'only http(s), mailto' }
 		@{ Name = 'a link out of the repository'; Text = "# Title`n`nSee [x](../../../../x.txt).`n"; Line = 3; Expect = 'outside the repository' }
 		@{ Name = 'a link from a private repository to a source file'; Text = "# Title`n`nSee [it](../../Source/SampleEditor/Private/SampleEditor.cpp).`n"; Line = 3; Expect = 'is private'; Private = $true }
 		@{ Name = 'a link from a private repository to an image file'; Text = "# Title`n`nSee [it](Images/Shot.png).`n"; Line = 3; Expect = 'is private'; Private = $true }
@@ -737,6 +846,28 @@ try
 		Check "reports $($Rule.Name)" ($Hit.Count -gt 0 -and $script:Result.Errors -gt 0) ($Annotations -join "`n")
 	}
 
+	# Markdown the site renders, which a line-by-line reading could get wrong.
+	$Fence = '```'
+	$Valid = @(
+		@{ Name = 'a fence that only a fence indented at most three spaces closes'; Text = (@('# Title', '', $Fence, "        $Fence", '<div>', $Fence, '') -join "`n") }
+		@{ Name = 'a fence in a quote'; Text = (@('# Title', '', "> ${Fence}ini", '> # comment', '> <div>', "> $Fence", '') -join "`n") }
+		@{ Name = 'a fence opened on the first line of a list item'; Text = (@('# Title', '', "- $Fence", '  # comment', '  <div>', "  $Fence", '') -join "`n") }
+		@{ Name = 'indented code in a list item'; Text = "# Title`n`n-     <div>`n" }
+		@{ Name = 'a < that opens no HTML'; Text = "# Title`n`nUse a <? b, or a <!-- c, to compare.`n" }
+		@{ Name = 'a title on the line after a definition'; Text = "# Title`n`nSee [it][x].`n`n[x]: Sample.md`n  `"Home`"`n" }
+		@{ Name = 'a label that is no definition'; Text = "# Title`n`n[Note]: plain text.`n" }
+		@{ Name = 'a footnote, in a private repository'; Text = "# Title`n`nText[^1].`n`n[^1]: A note.`n"; Private = $true }
+	)
+	foreach ($Case in $Valid)
+	{
+		$Dir = $Bundle.Dir
+		if ($Case.Private) { $Dir = $script:PrivateBundle.Dir }
+		New-TestFile "$Dir\Good.md" $Case.Text
+		$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Dir }
+		Remove-Item "$Dir\Good.md"
+		Check "passes $($Case.Name)" ($Annotations.Count -eq 0) ($Annotations -join "`n")
+	}
+
 	New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`nSee [it](../../Source/SampleEditor/Private/SampleEditor.cpp).`n"
 	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
 	Remove-Item "$($Bundle.Dir)\Bad.md"
@@ -748,12 +879,45 @@ try
 	Remove-Item "$($Bundle.Dir)\Bad.md"
 	Check 'with -AsWarnings problems are warnings, and still counted' ($Annotations.Count -eq 1 -and $Annotations[0] -like '::warning file=Content/Docs/Bad.md,line=3,*' -and $script:Result.Errors -eq 1) ($Annotations -join "`n")
 
+	$Json = [IO.File]::ReadAllText("$($Bundle.Dir)\docs.json")
+	$JsonRules = @(
+		@{ Find = '(?m)^  "ref": .*\n'; Replace = ''; Expect = 'docs.json has no "ref".' }
+		@{ Find = '"schema": 1'; Replace = '"schema": 2'; Expect = '"schema" must be 1.' }
+		@{ Find = '"section": "unreal"'; Replace = '"section": "web"'; Expect = "section 'web' is not one the docs site knows" }
+		@{ Find = '"slug": "sample-docs"'; Replace = '"slug": "Bad_Slug"'; Expect = "slug 'Bad_Slug' must be lowercase kebab-case." }
+		@{ Find = '"released": "2026-11-09"'; Replace = '"released": "11/09/2026"'; Expect = '"released" must be a date' }
+		@{ Find = '"commit": "[0-9a-f]+"'; Replace = '"commit": "abc123"'; Expect = '"commit" must be a full 40-character SHA.' }
+		@{ Find = '"repo": "Example/SampleDocs"'; Replace = '"repo": "x"'; Expect = '"repo" must be owner/name.' }
+		@{ Find = '"version": "1.2.3"'; Replace = '"version": "v1.2.3"'; Expect = "version 'v1.2.3' is not a release version" }
+		@{ Find = '"preview": false'; Replace = '"preview": true'; Expect = 'a preview has "version": null.' }
+		@{ Find = '"private": false'; Replace = '"private": "no"'; Expect = '"private" must be true or false.' }
+		@{ Find = '"supportUrl": "[^"]*"'; Replace = '"supportUrl": "support@example.com"'; Expect = '"supportUrl" must be an http(s) URL or null.' }
+		@{ Find = '"fabUrl": "[^"]*"'; Replace = '"fabUrl": "www.fab.com"'; Expect = '"fabUrl" must be an http(s) URL or null.' }
+		@{ Find = '"glyph": "SA"'; Replace = '"glyph": "SAM"'; Expect = '"glyph" must be one or two letters or digits.' }
+	)
+	foreach ($Rule in $JsonRules)
+	{
+		$Edited = [regex]::Replace($Json, $Rule.Find, $Rule.Replace)
+		Write-Utf8File "$($Bundle.Dir)\docs.json" $Edited
+		$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
+		Check "reports docs.json: $($Rule.Expect)" ($Edited -cne $Json -and @($Annotations | Where-Object { $_.StartsWith('::error title=Docs::') -and $_.Contains($Rule.Expect) }).Count -eq 1) ($Annotations -join "`n")
+	}
+	Write-Utf8File "$($Bundle.Dir)\docs.json" $Json
+
 	$FileRules = @(
-		@{ Name = 'an image over 5 MB'; Add = { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Images\Big.png", (New-Object byte[] 5000001)) }; Expect = 'file=Content/Docs/Images/Big.png,title=Docs::The image is 5.0 MB; the limit is 5 MB.' }
-		@{ Name = 'a bundle over 25 MB'; Add = { foreach ($N in 1..6) { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Images\Part$N.png", (New-Object byte[] 4500000)) } }; Expect = 'title=Docs::The docs come to 27.0 MB; the limit is 25 MB.' }
+		@{ Name = 'an image over 5 MB'; Add = { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Images\Big.png", (New-Object byte[] 5000001)) }; Expect = 'file=Content/Docs/Images/Big.png,title=Docs::The image is over the 5 MB limit (5,000,001 bytes).' }
+		@{ Name = 'a bundle over 25 MB'; Add = { foreach ($N in 1..6) { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Images\Part$N.png", (New-Object byte[] 4500000)) } }; Expect = 'title=Docs::The docs are over the 25 MB limit (27,0' }
 		@{ Name = 'a file type a bundle cannot hold'; Add = { New-TestFile "$($Bundle.Dir)\notes.txt" 'x' }; Expect = 'file=Content/Docs/notes.txt,title=Docs::Only .md pages' }
+		@{ Name = 'a page ending in .MD'; Add = { New-TestFile "$($Bundle.Dir)\Upper.MD" "# Upper`n" }; Expect = 'file=Content/Docs/Upper.MD,title=Docs::A page must end in .md, in lowercase' }
 		@{ Name = 'CRLF in a bundle'; Add = { New-TestFile "$($Bundle.Dir)\Crlf.md" "# Title`r`n" }; Expect = 'file=Content/Docs/Crlf.md,title=Docs::CR line endings' }
+		@{ Name = 'a page that is not UTF-8'; Add = { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Ansi.md", [byte[]](0x23, 0x20, 0x41, 0x0A, 0x0A, 0x93, 0x41, 0x94, 0x0A)) }; Expect = 'file=Content/Docs/Ansi.md,title=Docs::The page is not UTF-8' }
+		@{ Name = 'a UTF-16 page in a bundle'; Add = { [IO.File]::WriteAllText("$($Bundle.Dir)\Wide.md", "# Wide`n", (New-Object System.Text.UnicodeEncoding $false, $true)) }; Expect = 'file=Content/Docs/Wide.md,title=Docs::The page is not UTF-8' }
 		@{ Name = 'a missing landing page'; Add = { Rename-Item "$($Bundle.Dir)\Sample.md" 'Landing.md' }; Expect = 'The landing page Content/Docs/Sample.md is missing' }
+		@{ Name = 'a landing page with the wrong case'; Add = { Rename-Item "$($Bundle.Dir)\Sample.md" 'sample.md' }; Expect = 'file=Content/Docs/sample.md,title=Docs::The landing page must be named Sample.md' }
+		@{ Name = 'a page whose URL the site keeps for versions'; Add = { New-TestFile "$($Bundle.Dir)\Releases.md" "# Releases`n" }; Expect = 'file=Content/Docs/Releases.md,title=Docs::Its URL would start with /releases/' }
+		@{ Name = 'a folder named like a version'; Add = { New-TestFile "$($Bundle.Dir)\V2\Migration.md" "# Migration`n" }; Expect = 'file=Content/Docs/V2/Migration.md,title=Docs::Its URL would start with /v2/' }
+		@{ Name = 'a page name with no letters or digits'; Add = { New-TestFile "$($Bundle.Dir)\__.md" "# Underscores`n" }; Expect = 'file=Content/Docs/__.md,title=Docs::A part of its path has no letters or digits' }
+		@{ Name = 'two pages with one URL'; Add = { New-TestFile "$($Bundle.Dir)\Getting Started.md" "# A`n"; New-TestFile "$($Bundle.Dir)\getting-started.md" "# B`n" }; Expect = 'file=Content/Docs/getting-started.md,title=Docs::It gets the same URL as Content/Docs/Getting Started.md: /unreal/sample-docs/getting-started/.' }
 	)
 	foreach ($Rule in $FileRules)
 	{
@@ -766,6 +930,11 @@ try
 		Copy-Item "$Clean\*" $Bundle.Dir -Recurse
 		Check "reports $($Rule.Name)" (@($Annotations | Where-Object { $_.StartsWith('::error ') -and $_.Contains($Rule.Expect) }).Count -eq 1) ($Annotations -join "`n")
 	}
+
+	[IO.File]::WriteAllBytes("$($Bundle.Dir)\Images\Exact.png", (New-Object byte[] 5000000))
+	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
+	Remove-Item "$($Bundle.Dir)\Images\Exact.png"
+	Check 'an image of exactly 5 MB passes' ($Annotations.Count -eq 0) ($Annotations -join "`n")
 
 	$Moved = Join-Paths $DocsOut 'unreal' 'sample-docs' '9.9.9'
 	Copy-Item $Bundle.Dir $Moved -Recurse
@@ -784,14 +953,23 @@ try
 	Write-Host 'Docs script'
 	$null = Invoke-NativeQuiet git @('-C', $Plugin, 'init', '-q')
 	$null = Invoke-NativeQuiet git @('-C', $Plugin, 'add', '-A')
-	$null = Invoke-NativeQuiet git @('-C', $Plugin, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'docs')
+	# Backdated, so the preview's date is the docs commit's and not today's.
+	$env:GIT_COMMITTER_DATE = '2026-01-02T03:04:05Z'
+	try { $null = Invoke-NativeQuiet git @('-C', $Plugin, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'docs') }
+	finally { Remove-Item Env:\GIT_COMMITTER_DATE }
 	$PluginHead = (Invoke-NativeQuiet git @('-C', $Plugin, 'rev-parse', 'HEAD')).Output | Select-Object -First 1
 	$DocsScript = Join-Path $Root 'plugin/docs/New-DocsBundle.ps1'
 	$ScriptOut = Join-Paths $Temp 'docs-script'
 	$Annotations = Get-Annotations { & $DocsScript -PluginDir $Plugin -OutDir $ScriptOut -EngineVersions '5.8' -Repository 'Example/SampleDocs' -Private:$false -Strict }
 	$ScriptJson = [IO.File]::ReadAllText("$ScriptOut\unreal\sample-docs\preview\docs.json") | ConvertFrom-Json
-	Check 'the script builds a preview from the checkout' ($ScriptJson.preview -eq $true -and $ScriptJson.commit -eq $PluginHead -and $ScriptJson.ref -and $ScriptJson.released -match '^\d{4}-\d{2}-\d{2}$' -and (Same $ScriptJson.unreal.engines @('5.8'))) ($ScriptJson | ConvertTo-Json -Depth 5)
+	Check 'the script builds a preview from the checkout, dated by its last docs commit' ($ScriptJson.preview -eq $true -and $ScriptJson.commit -eq $PluginHead -and $ScriptJson.ref -and $ScriptJson.released -eq '2026-01-02' -and (Same $ScriptJson.unreal.engines @('5.8'))) ($ScriptJson | ConvertTo-Json -Depth 5)
 	Check 'clean docs pass strictly, with the left-out file as a warning' (@($Annotations | Where-Object { $_ -like '::error*' }).Count -eq 0 -and @($Annotations | Where-Object { $_ -like '::warning*Notes.txt*' }).Count -eq 1) ($Annotations -join "`n")
+
+	# cd changes PowerShell's location but not the process's, which .NET resolves against.
+	Push-Location $Temp
+	try { $null = Get-Annotations { try { & $DocsScript -PluginDir 'Sample' -OutDir 'docs-relative' -Repository 'Example/SampleDocs' -Private:$false } catch { } } }
+	finally { Pop-Location }
+	Check 'relative paths are taken from the current location' (Test-Path -LiteralPath "$Temp\docs-relative\unreal\sample-docs\preview\docs.json")
 
 	New-TestFile "$Plugin\Content\Docs\Bad.md" "# Title`n`nSee [it](Missing.md).`n"
 	$Annotations = Get-Annotations { & $DocsScript -PluginDir $Plugin -OutDir $ScriptOut -Repository 'Example/SampleDocs' -Private:$false }
@@ -800,6 +978,37 @@ try
 	$null = Get-Annotations { try { & $DocsScript -PluginDir $Plugin -OutDir $ScriptOut -Repository 'Example/SampleDocs' -Private:$false -Strict } catch { $script:Caught = $_.Exception.Message } }
 	Check 'with -Strict it fails the script' ($script:Caught -like '*1 problem(s)*') "$script:Caught"
 	Remove-Item "$Plugin\Content\Docs\Bad.md"
+
+	# The action as the release job runs it. gh knows a release for v1.4.0, and none yet for v1.5.0.
+	$Stub = Join-Paths $Temp 'gh-stub'
+	New-TestFile "$Stub\gh.cmd" ((@(
+		'@echo off'
+		'if "%1 %2 %3"=="release view v1.4.0" ('
+		'  echo 2026-10-01T09:30:00Z'
+		'  exit /b 0'
+		')'
+		'exit /b 1'
+	) -join "`r`n") + "`r`n")
+	$StepOut = Join-Paths $Temp 'docs-step'
+	$OutputFile = Join-Paths $Temp 'docs-step-output.txt'
+	$Inputs = @{ 'plugin-dir' = $Plugin; 'engine-versions' = '5.8'; tag = 'v1.5.0'; strict = 'true'; private = 'false'; repository = 'Example/SampleDocs'; 'out-dir' = $StepOut; token = '' }
+	$Environment = @{ PATH = "$Stub;$env:PATH"; GITHUB_OUTPUT = $OutputFile }
+	$Today = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+	$Step = Invoke-ActionStep (Join-Path $Root 'plugin/docs') $Inputs $Environment
+	$Dates = @($Today, [DateTime]::UtcNow.ToString('yyyy-MM-dd'))
+	Check "the docs step passes for a first release, which gh cannot find yet" ($Step.ExitCode -eq 0) ($Step.Output -join "`n")
+	$StepDir = Join-Paths $StepOut 'unreal' 'sample-docs' '1.5.0'
+	$StepJson = [IO.File]::ReadAllText("$StepDir\docs.json") | ConvertFrom-Json
+	Check "a release's bundle is in its version folder, with the tag as its ref and today's date" ($StepJson.version -eq '1.5.0' -and $StepJson.ref -eq 'v1.5.0' -and $StepJson.preview -eq $false -and $Dates -contains $StepJson.released) ($StepJson | ConvertTo-Json -Depth 5)
+	$StepZip = Join-Paths $StepOut 'SampleDocs-1.5.0-docs.zip'
+	$Outputs = @([IO.File]::ReadAllLines($OutputFile))
+	Check 'the step outputs the bundle and its zip, with a .sha256 beside it' ((Same $Outputs @("bundle-dir=$StepDir", "zip=$StepZip")) -and [IO.File]::ReadAllText("$StepZip.sha256") -eq "$(Get-FileSha256 $StepZip)  SampleDocs-1.5.0-docs.zip`n") ($Outputs -join "`n")
+
+	Remove-Item $OutputFile
+	$Inputs.tag = 'v1.4.0'
+	$Step = Invoke-ActionStep (Join-Path $Root 'plugin/docs') $Inputs $Environment
+	$StepJson = [IO.File]::ReadAllText("$(Join-Paths $StepOut 'unreal' 'sample-docs' '1.4.0')\docs.json") | ConvertFrom-Json
+	Check 'a re-run keeps the date of the release it completes' ($Step.ExitCode -eq 0 -and $StepJson.released -eq '2026-10-01') ($Step.Output -join "`n")
 
 	New-FixturePlugin $NoDescription
 	Remove-Item "$NoDescription\Content\Docs" -Recurse
@@ -812,6 +1021,8 @@ try
 	Write-Host 'Docs publishing'
 	$DocsRemote = Join-Paths $Temp 'docs-content.git'
 	$null = Invoke-NativeQuiet git @('init', '-q', '--bare', '-b', 'main', $DocsRemote)
+	# As GitHub does, so a clone can leave file contents on the server.
+	$null = Invoke-NativeQuiet git @('--git-dir', $DocsRemote, 'config', 'uploadpack.allowFilter', 'true')
 	$Identity = @('-c', 'user.name=Test', '-c', 'user.email=test@example.com')
 	$Seed = Join-Paths $Temp 'docs-seed'
 	New-TestFile "$Seed\README.md" "contract`n"
@@ -826,17 +1037,24 @@ try
 
 	$ContentA = Join-Paths $Temp 'docs-a'
 	$null = Invoke-NativeQuiet git @('clone', '-q', $DocsRemote, $ContentA)
+	# A change outside the bundle's folder, which the commit must leave out.
+	[IO.File]::AppendAllText("$ContentA\README.md", "local edit`n")
 	$script:Published = $null
 	$null = (& { $script:Published = Publish-DocsBundle -BundleDir $Bundle.Dir -ContentDir $ContentA } 6>&1 | Out-String)
 	$Pushed = Get-RemoteLine @('ls-tree', '-r', '--name-only', 'main', 'unreal/sample-docs/1.2.3')
 	Check 'publishing pushes the bundle to its version folder' ($script:Published.Changed -and (Same $Pushed ($Bundle.Files | ForEach-Object { "unreal/sample-docs/1.2.3/$_" }))) ($Pushed -join ', ')
 	Check 'the commit is named "<Name> <version> docs"' ((Get-RemoteLine @('log', '-1', '--format=%s', 'main')) -eq 'Sample 1.2.3 docs')
-	Check 'the commit touches only that folder' (@(Get-RemoteLine @('diff-tree', '--no-commit-id', '--name-only', '-r', 'main') | Where-Object { -not $_.StartsWith('unreal/sample-docs/1.2.3/') }).Count -eq 0)
+	Check 'the commit touches only that folder' (@(Get-RemoteLine @('diff-tree', '--no-commit-id', '--name-only', '-r', 'main') | Where-Object { -not $_.StartsWith('unreal/sample-docs/1.2.3/') }).Count -eq 0 -and (Same (Get-RemoteLine @('show', 'main:README.md')) @('contract')) -and (Invoke-NativeQuiet git @('-C', $ContentA, 'diff', '--cached', '--quiet')).ExitCode -eq 0)
 	Check 'other versions and products are left alone' (Same (Get-RemoteLine @('rev-parse', 'main:unreal/other', 'main:unreal/sample-docs/1.0.0')) $Untouched)
+	$null = Invoke-NativeQuiet git @('-C', $ContentA, 'checkout', 'HEAD', '--', 'README.md')
 
 	$Count = Get-RemoteLine @('rev-list', '--count', 'main')
 	$null = (& { $script:Published = Publish-DocsBundle -BundleDir $Bundle.Dir -ContentDir $ContentA } 6>&1 | Out-String)
 	Check 'publishing the same bundle again changes nothing' (-not $script:Published.Changed -and (Get-RemoteLine @('rev-list', '--count', 'main')) -eq $Count)
+
+	$script:Caught = $null
+	try { $null = Publish-DocsBundle -BundleDir $script:PreviewBundle.Dir -ContentDir $ContentA } catch { $script:Caught = $_.Exception.Message }
+	Check 'a preview is never published' ($script:Caught -like '*never published*' -and (Get-RemoteLine @('rev-list', '--count', 'main')) -eq $Count) "$script:Caught"
 
 	# Another product pushes first, so this push is turned away and has to rebase.
 	$ContentB = Join-Paths $Temp 'docs-b'
@@ -854,26 +1072,64 @@ try
 	Check 'a page deleted since the last push is gone' (@(Get-RemoteLine @('ls-tree', '-r', '--name-only', 'main', 'unreal/sample-docs/1.2.3') | Where-Object { $_ -like '*Guides*' }).Count -eq 0)
 
 	$PublishScript = Join-Path $Root 'plugin/publish-docs/Publish-Docs.ps1'
-	$SavedToken = $env:DOCS_TOKEN
+	$RemoteUrl = 'file:///' + $DocsRemote.Replace('\', '/')
+	$Saved = @{ DOCS_TOKEN = $env:DOCS_TOKEN; GCM_INTERACTIVE = $env:GCM_INTERACTIVE }
 	Remove-Item Env:\DOCS_TOKEN -ErrorAction SilentlyContinue
+	# Should the token check break, a repository that does not exist and no sign-in prompt.
+	$env:GCM_INTERACTIVE = 'never'
 	$script:Caught = $null
-	try { & $PublishScript -BundleDir $Bundle.Dir 6>$null } catch { $script:Caught = $_.Exception.Message }
-	if ($SavedToken) { $env:DOCS_TOKEN = $SavedToken }
+	try { & $PublishScript -BundleDir $Bundle.Dir -Repository 'Example/does-not-exist' 6>$null } catch { $script:Caught = $_.Exception.Message }
+	foreach ($Name in $Saved.Keys) { [Environment]::SetEnvironmentVariable($Name, $Saved[$Name]) }
 	Check 'publishing without a token fails, naming the secret' ($script:Caught -like '*KHAOS_DOCS_TOKEN*') "$script:Caught"
+
+	$script:Caught = $null
+	try { & $PublishScript -BundleDir $script:PreviewBundle.Dir -RemoteUrl $RemoteUrl 6>$null } catch { $script:Caught = $_.Exception.Message }
+	Check 'the script refuses a preview' ($script:Caught -like '*is a preview*') "$script:Caught"
 
 	$Next = $BundleArguments.Clone()
 	$Next.Version = '1.3.0'
 	$null = Get-Annotations { $script:Other = New-DocsBundle @Next }
-	$Output = (& $PublishScript -BundleDir $script:Other.Dir -RemoteUrl $DocsRemote -WorkDir (Join-Paths $Temp 'docs-work') 6>&1 | Out-String)
-	Check 'the script clones just the folder and pushes' ((Get-RemoteLine @('log', '-1', '--format=%s', 'main')) -eq 'Sample 1.3.0 docs' -and $Output.Contains('Pushed the Sample 1.3.0 docs')) $Output
+	# Another product pushes between the script's clone and its push: once, from a pre-push hook.
+	$ContentD = Join-Paths $Temp 'docs-d'
+	$null = Invoke-NativeQuiet git @('clone', '-q', $DocsRemote, $ContentD)
+	New-TestFile "$ContentD\unreal\other\3.0.0\docs.json" "{}`n"
+	$null = Invoke-NativeQuiet git @('-C', $ContentD, 'add', '-A')
+	$null = Invoke-NativeQuiet git (@('-C', $ContentD) + $Identity + @('commit', '-q', '-m', 'Other 3.0.0 docs'))
+	$Marker = (Join-Paths $Temp 'race-once').Replace('\', '/')
+	New-TestFile $Marker 'once'
+	$Hooks = Join-Paths $Temp 'race-hooks'
+	New-TestFile "$Hooks\pre-push" "#!/bin/sh`nif [ -f '$Marker' ]; then`n  rm '$Marker'`n  git -C '$($ContentD.Replace('\', '/'))' push -q --no-verify origin HEAD:refs/heads/main`nfi`n"
+	$GitVariables = @('GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_TERMINAL_PROMPT')
+	$Saved = @{}
+	foreach ($Name in $GitVariables) { $Saved[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+	$env:GIT_CONFIG_COUNT = '1'
+	$env:GIT_CONFIG_KEY_0 = 'core.hooksPath'
+	$env:GIT_CONFIG_VALUE_0 = $Hooks.Replace('\', '/')
+	$env:GIT_TERMINAL_PROMPT = 'kept'
+	$WorkDir = Join-Paths $Temp 'docs-work'
+	try { $Output = (& { try { & $PublishScript -BundleDir $script:Other.Dir -RemoteUrl $RemoteUrl -WorkDir $WorkDir } catch { Write-Host $_.Exception.Message } } 6>&1 | Out-String) }
+	finally
+	{
+		$Kept = ($env:GIT_TERMINAL_PROMPT -eq 'kept' -and $env:GIT_CONFIG_KEY_0 -eq 'core.hooksPath')
+		foreach ($Name in $GitVariables) { [Environment]::SetEnvironmentVariable($Name, $Saved[$Name]) }
+	}
+	$Clone = Join-Paths $WorkDir 'docs-content'
+	$Partial = (Invoke-NativeQuiet git @('-C', $Clone, 'config', '--get', 'remote.origin.promisor')).Output -contains 'true'
+	Check "the script clones without file contents, and checks out only the bundle's folder" ($Partial -and -not $Output.Contains('filter is ignored') -and (Test-Path -LiteralPath "$Clone\unreal\sample-docs\1.3.0\docs.json") -and -not (Test-Path -LiteralPath "$Clone\unreal\other")) $Output
+	$Log = Get-RemoteLine @('log', '--format=%s', 'main')
+	Check 'the script rebases a push that lost a race, and says where it pushed' ($Output.Contains('moved on') -and $Output.Contains("Pushed the Sample 1.3.0 docs to $RemoteUrl") -and (Same ($Log | Select-Object -First 2) @('Sample 1.3.0 docs', 'Other 3.0.0 docs'))) $Output
+	Check 'the script puts back the git settings it changes' $Kept
 
 	# A remote that turns pushes away for another reason, such as branch protection.
 	$ContentC = Join-Paths $Temp 'docs-c'
 	$null = Invoke-NativeQuiet git @('clone', '-q', $DocsRemote, $ContentC)
+	$Patch = $BundleArguments.Clone()
+	$Patch.Version = '1.3.1'
+	$null = Get-Annotations { $script:Other = New-DocsBundle @Patch }
 	New-TestFile "$DocsRemote\hooks\pre-receive" "#!/bin/sh`nexit 1`n"
 	$Count = Get-RemoteLine @('rev-list', '--count', 'main')
 	$script:Caught = $null
-	$Output = (& { try { $null = Publish-DocsBundle -BundleDir $script:PreviewBundle.Dir -ContentDir $ContentC } catch { $script:Caught = $_.Exception.Message } } 6>&1 | Out-String)
+	$Output = (& { try { $null = Publish-DocsBundle -BundleDir $script:Other.Dir -ContentDir $ContentC } catch { $script:Caught = $_.Exception.Message } } 6>&1 | Out-String)
 	Remove-Item "$DocsRemote\hooks\pre-receive"
 	Check 'any other push failure stops without retrying' ($script:Caught -like '*failed; see the git output*' -and -not $Output.Contains('moved on') -and (Get-RemoteLine @('rev-list', '--count', 'main')) -eq $Count) "$script:Caught"
 
@@ -892,9 +1148,11 @@ try
 }
 finally
 {
+	foreach ($Name in $CiFiles.Keys) { [Environment]::SetEnvironmentVariable($Name, $CiFiles[$Name]) }
 	if (Test-Path $Temp) { Remove-Item $Temp -Recurse -Force }
 }
 
 Write-Host ''
 Write-Host "$script:Passes passed, $script:Failures failed."
 if ($script:Failures -gt 0) { exit 1 }
+exit 0

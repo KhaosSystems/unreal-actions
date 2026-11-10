@@ -12,7 +12,7 @@ With -Tag the bundle is that release's, and it is also zipped as <Repo>-<version
 checks on every run, and what to build locally to try the docs on the website.
 
 .EXAMPLE
-./plugin/docs/New-DocsBundle.ps1 -PluginDir ../MyPlugin -OutDir ../docs-content -EngineVersions 5.8
+./plugin/docs/New-DocsBundle.ps1 -PluginDir ../MyPlugin -OutDir ../website/docs/src/content/bundles -EngineVersions 5.8
 #>
 [CmdletBinding()]
 param(
@@ -108,7 +108,7 @@ $Bundle.Files | ForEach-Object { Write-Host "  $_" }
 $Result = Test-DocsBundle -BundleDir $Bundle.Dir -AsWarnings:(-not $Strict)
 Stop-CiGroup
 
-$Pages = @($Bundle.Files | Where-Object { $_ -match '\.md$' }).Count
+$Pages = @($Bundle.Files | Where-Object { $_ -cmatch '\.md$' }).Count
 $Summary = @(
 	"### Docs: $($Bundle.Manifest.name) $(Split-Path $Bundle.Folder -Leaf)"
 	''

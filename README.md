@@ -97,17 +97,17 @@ anything. It attaches the bundle as `<Repo>-<version>-docs.zip` with a `.sha256`
 Every run checks the docs against the contract's rules: errors with `publish-docs`, warnings
 without.
 
-If the push fails after the release is made, re-run the failed jobs. The bundle comes out
-identical, and the push replaces only that version's folder.
+If the push fails after the release is made, re-run the failed jobs. The bundle is rebuilt with
+the release's date, and the push replaces only that version's folder.
 
-To preview docs on the site, build a bundle from a checkout:
+To preview docs on the site, build a bundle from a checkout into the website's bundles folder:
 
 ```powershell
-.\plugin\docs\New-DocsBundle.ps1 -PluginDir ..\MyPlugin -OutDir ..\docs-content -EngineVersions 5.8
+.\plugin\docs\New-DocsBundle.ps1 -PluginDir ..\MyPlugin -OutDir ..\website\docs\src\content\bundles -EngineVersions 5.8
 ```
 
-It writes `unreal/<slug>/preview/` and prints any problems. Point `-OutDir` at the folder the
-website reads docs-content from; the website's `docs/README.md` says where.
+It writes `unreal/<slug>/preview/` and prints any problems. If the site reads its bundles from the
+folder `DOCS_BUNDLES` names instead, point `-OutDir` there.
 
 ### Badges
 
