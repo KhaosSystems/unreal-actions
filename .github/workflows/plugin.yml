@@ -260,6 +260,8 @@ jobs:
     outputs:
       url: ${{ steps.release.outputs.url }}
       docs-folder: ${{ steps.docs.outputs.folder }}
+      # Which attempt of the run made the release, so a re-run of the docs push does not announce it again.
+      attempt: ${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -303,8 +305,9 @@ jobs:
           target: ${{ github.sha }}
           docs-zip: ${{ steps.docs.outputs.zip }}
 
-  # Its own job, so a failed push leaves the release alone: re-run the failed jobs, and only this one
-  # runs again, pushing the bundle the release holds. It replaces only this version's folder.
+  # Its own job, so a failed push leaves the release alone. Re-run the failed jobs: this one pushes
+  # the bundle the release holds and replaces only this version's folder. notify runs again too,
+  # and posts only the docs result.
   docs:
     name: Publish docs
     needs: release
@@ -363,13 +366,27 @@ jobs:
           RESULTS: ${{ needs.package.result }} ${{ needs.build.result }} ${{ needs.release.result }}
           RELEASE_RESULT: ${{ needs.release.result }}
           RELEASE_URL: ${{ needs.release.outputs.url }}
+          RELEASE_ATTEMPT: ${{ needs.release.outputs.attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           DOCS_RESULT: ${{ needs.docs.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REF: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
         run: |
           [ -n "$WEBHOOK" ] || exit 0
-          if [ "$RELEASE_RESULT" = success ]; then
+          if [ "$RELEASE_RESULT" = success ] && [ "$RELEASE_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            # A re-run of the failed docs push. An earlier attempt announced the release.
+            if [ "$DOCS_RESULT" = success ]; then
+              title="${PLUGIN} ${VERSION} docs published"
+              color=3066993
+            elif [ "$DOCS_RESULT" = failure ]; then
+              title="${PLUGIN} ${VERSION} docs failed again"
+              color=15158332
+            else
+              exit 0
+            fi
+            description="${RUN_URL}"
+          elif [ "$RELEASE_RESULT" = success ]; then
             title="${PLUGIN} ${VERSION} is ready for Fab"
             description="Built and tested. Release: ${RELEASE_URL}
           The run summary has the links and version notes to paste into the Fab portal: ${RUN_URL}"

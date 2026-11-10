@@ -99,8 +99,9 @@ release the token check before the build. A release whose token is missing or ex
 Every run checks the docs against the contract's rules: errors with `publish-docs`, warnings
 without.
 
-If the push fails, re-run the failed jobs. Only the `docs` job runs again: it pushes the same
-bundle, leaves the release alone and replaces only that version's folder.
+If the push fails, re-run the failed jobs. The release is left alone: the `docs` job pushes the same
+bundle and replaces only that version's folder. `notify` runs again too, and posts only the docs
+result.
 
 To preview docs on the site, build a bundle from a checkout into the website's bundles folder:
 
