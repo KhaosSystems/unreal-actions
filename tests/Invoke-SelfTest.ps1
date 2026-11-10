@@ -358,6 +358,13 @@ try
 	$Outcome = Test-Fixture $Plugin
 	Check 'docs listed in part are one error, naming the first file left out' ($Outcome.Errors.Count -eq 1 -and $Outcome.Errors[0].StartsWith('::error file=Docs/Images/Logo.svg,title=Fab requirement::Fab buyers would not get Docs/Images/Logo.svg and 1 other file(s) in Docs/:')) ($Outcome.Annotations -join "`n")
 
+	# Docs that FilterPlugin.ini lists, then takes a folder out of again.
+	New-FixturePlugin $Plugin
+	New-TestFile "$Plugin\Config\FilterPlugin.ini" "[FilterPlugin]`n/Docs/...`n-/Docs/Private/...`n"
+	New-TestFile "$Plugin\Docs\Private\Notes.md" "# Notes`n"
+	$Outcome = Test-Fixture $Plugin
+	Check 'docs that FilterPlugin.ini excludes are one error, naming the line instead of asking for /Docs/...' ($Outcome.Errors.Count -eq 1 -and $Outcome.Errors[0].StartsWith('::error file=Docs/Private/Notes.md,title=Fab requirement::Fab buyers would not get Docs/Private/Notes.md: Config/FilterPlugin.ini excludes it with -/Docs/Private/.... Remove that line') -and -not $Outcome.Errors[0].Contains('Add /Docs/')) ($Outcome.Annotations -join "`n")
+
 	# Git keeps no empty folder, so a plugin with no content has no Content/; packaging adds it.
 	New-FixturePlugin $Plugin
 	Remove-Item "$Plugin\Content" -Recurse -Force

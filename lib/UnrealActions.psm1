@@ -638,20 +638,28 @@ function New-FilterRules([string[]]$Patterns)
 		$Rules += [pscustomobject]@{
 			Regex = New-Object regex((ConvertTo-FilterRegex $Pattern), 'IgnoreCase, CultureInvariant')
 			Exclude = $Exclude
+			Text = $Rule
 		}
 	}
 	return ,$Rules
 }
 
+<# The rule from New-FilterRules that decides a '/'-separated relative path, the last to match, or nothing. #>
+function Find-FilterRule($Rules, [string]$Relative)
+{
+	$Found = $null
+	foreach ($Rule in $Rules)
+	{
+		if ($Rule.Regex.IsMatch($Relative)) { $Found = $Rule }
+	}
+	return $Found
+}
+
 <# Whether rules from New-FilterRules include a '/'-separated relative path: the last match decides. #>
 function Test-FilterRules($Rules, [string]$Relative)
 {
-	$Included = $false
-	foreach ($Rule in $Rules)
-	{
-		if ($Rule.Regex.IsMatch($Relative)) { $Included = -not $Rule.Exclude }
-	}
-	return $Included
+	$Rule = Find-FilterRule $Rules $Relative
+	return ($null -ne $Rule -and -not $Rule.Exclude)
 }
 
 # Never shipped, wherever they appear and whatever FilterPlugin.ini says. Fab declines code plugins
@@ -1213,11 +1221,21 @@ function Test-PluginPackage
 	if ($Docs)
 	{
 		$Unshipped = @((Get-RelativeFiles (Join-Paths $Descriptor.Dir $Docs)) | Where-Object { $script:ExcludedFiles -notcontains [IO.Path]::GetFileName($_) } | ForEach-Object { "$Docs/$_" } | Where-Object { -not (Test-FilterRules $Shipped $_) })
-		if ($Unshipped.Count -gt 0)
+		# A file that no line lists, and one that a '-' line in FilterPlugin.ini takes out again.
+		$Unlisted = @($Unshipped | Where-Object { -not (Find-FilterRule $Shipped $_) })
+		$Excluded = @($Unshipped | Where-Object { Find-FilterRule $Shipped $_ })
+		if ($Unlisted.Count -gt 0)
 		{
 			$More = ''
-			if ($Unshipped.Count -gt 1) { $More = " and $($Unshipped.Count - 1) other file(s) in $Docs/" }
-			& $Fail "Fab buyers would not get $($Unshipped[0])$($More): BuildPlugin, which Epic builds the plugin with, copies $Docs/ only when Config/FilterPlugin.ini lists it. Add /$($script:DocsBase)/... under [FilterPlugin]." $Unshipped[0]
+			if ($Unlisted.Count -gt 1) { $More = " and $($Unlisted.Count - 1) other file(s) in $Docs/" }
+			& $Fail "Fab buyers would not get $($Unlisted[0])$($More): BuildPlugin, which Epic builds the plugin with, copies $Docs/ only when Config/FilterPlugin.ini lists it. Add /$($script:DocsBase)/... under [FilterPlugin]." $Unlisted[0]
+		}
+		if ($Excluded.Count -gt 0)
+		{
+			$More = ''
+			if ($Excluded.Count -gt 1) { $More = " and $($Excluded.Count - 1) other file(s) in $Docs/" }
+			$Rule = (Find-FilterRule $Shipped $Excluded[0]).Text
+			& $Fail "Fab buyers would not get $($Excluded[0])$($More): Config/FilterPlugin.ini excludes it with $Rule. Remove that line, so buyers get the docs the docs site publishes, or move the file out of $Docs/." $Excluded[0]
 		}
 	}
 
