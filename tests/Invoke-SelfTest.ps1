@@ -824,6 +824,11 @@ try
 	$script:Caught = $null
 	try { New-DocsBundle @Short | Out-Null } catch { $script:Caught = $_.Exception.Message }
 	Check 'a short commit is refused' ($script:Caught -like 'Commit must be a full 40-character SHA*') "$script:Caught"
+	$Short = $BundleArguments.Clone()
+	$Short.Released = '2026-13-45'
+	$script:Caught = $null
+	try { New-DocsBundle @Short | Out-Null } catch { $script:Caught = $_.Exception.Message }
+	Check 'a date that does not exist is refused' ($script:Caught -like 'Released must be a date*') "$script:Caught"
 
 	$Preview = $BundleArguments.Clone()
 	$Preview.Version = ''
@@ -857,6 +862,9 @@ try
 	New-TestFile "$Edge\Docs\Upper.MD" "# Upper`n"
 	[IO.File]::WriteAllText("$Edge\Docs\Wide.md", "# Wide`r`n`r`nCaf$([char]0xE9).`r`n", (New-Object System.Text.UnicodeEncoding $false, $true))
 	New-TestFile "$Edge\Docs\Mac.md" "# Mac`r`rOld line endings.`r"
+	New-TestPng "$Edge\Docs\.attachments\A.png"
+	New-TestPng "$Edge\Docs\.attachments\B.png"
+	New-TestFile "$Edge\Docs\Guides\.draft.md" "# Draft`n"
 	$script:Other = $null
 	$Annotations = @(Get-Annotations { $script:Other = New-DocsBundle -PluginDir $Edge -OutDir "$Temp\docs-edge-out" -Ref 'main' -Commit $Commit -Repo 'Example/Edge' -Released '2026-11-09' })
 	Check 'a SupportURL that is not an http(s) URL is left out, with a warning' ($null -eq $script:Other.Manifest.supportUrl -and @($Annotations | Where-Object { $_ -like '::warning file=Sample.uplugin,title=Docs::SupportURL is not an http(s) URL*' }).Count -eq 1) ($Annotations -join "`n")
@@ -865,6 +873,7 @@ try
 	Check 'a page ending in .MD is left out, with a warning' ((Same $script:Other.Files @('Guides/Setup.md', 'Images/Logo.svg', 'Images/Shot.png', 'Mac.md', 'Sample.md', 'Wide.md', 'docs.json')) -and @($Annotations | Where-Object { $_ -like '::warning file=Docs/Upper.MD,title=Docs::*in lowercase*' }).Count -eq 1) ($Annotations -join "`n")
 	Check 'a UTF-16 page becomes UTF-8' (Same ([IO.File]::ReadAllBytes("$($script:Other.Dir)\Wide.md")) ((New-Object System.Text.UTF8Encoding $false).GetBytes("# Wide`n`nCaf$([char]0xE9).`n")))
 	Check 'CR line endings become LF' ([IO.File]::ReadAllText("$($script:Other.Dir)\Mac.md") -ceq "# Mac`n`nOld line endings.`n")
+	Check 'names that start with . are left out, one warning each' (@($Annotations | Where-Object { $_ -like '::warning file=Docs/.attachments,title=Docs::*start*"."*' }).Count -eq 1 -and @($Annotations | Where-Object { $_ -like '::warning file=Docs/Guides/.draft.md,title=Docs::*' }).Count -eq 1) ($Annotations -join "`n")
 	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $script:Other.Dir }
 	Check 'and then they pass' ($Annotations.Count -eq 0) ($Annotations -join "`n")
 
@@ -947,7 +956,7 @@ try
 		@{ Name = 'a remote image'; Text = "# Title`n`n![Shot](https://example.com/shot.png)`n"; Line = 3; Expect = 'loads no remote images' }
 		@{ Name = 'an image by reference'; Text = "# Title`n`n![Shot][s]`n`n[s]: Images/Shot.png`n"; Line = 3; Expect = 'Write images as ![alt](path)' }
 		@{ Name = 'a remote image by reference'; Text = "# Title`n`n![Shot][s]`n`n[s]: https://example.com/shot.png`n"; Line = 3; Expect = 'Write images as ![alt](path)' }
-		@{ Name = "an image by reference's definition, in a private repository"; Text = "# Title`n`n![Shot][s]`n`n[s]: Images/Shot.png`n"; Line = 5; Expect = 'is private'; Private = $true }
+		@{ Name = "an image by reference's definition, checked as a link"; Text = "# Title`n`n![Shot][s]`n`n[s]: Images/None.png`n"; Line = 5; Expect = 'Link Images/None.png is broken' }
 		@{ Name = 'a remote image inside a link'; Text = "# Title`n`n[![b](https://example.com/b.svg)](https://example.com)`n"; Line = 3; Expect = 'loads no remote images' }
 		@{ Name = 'a remote image whose alt text holds a link'; Text = "# Title`n`n![a [b](Sample.md) c](https://example.com/x.png)`n"; Line = 3; Expect = 'loads no remote images' }
 		@{ Name = 'a missing image whose alt text holds a link'; Text = "# Title`n`n![a [b](Sample.md) c](Images/missing.png)`n"; Line = 3; Expect = 'is broken' }
@@ -962,7 +971,18 @@ try
 		@{ Name = 'an autolink of another scheme'; Text = "# Title`n`nSee <ftp://example.com/x>.`n"; Line = 3; Expect = 'only http(s), mailto' }
 		@{ Name = 'a link out of the repository'; Text = "# Title`n`nSee [x](../../x.txt).`n"; Line = 3; Expect = 'outside the repository' }
 		@{ Name = 'a link from a private repository to a source file'; Text = "# Title`n`nSee [it](../Source/SampleEditor/Private/SampleEditor.cpp).`n"; Line = 3; Expect = 'is private'; Private = $true }
-		@{ Name = 'a link from a private repository to an image file'; Text = "# Title`n`nSee [it](Images/Shot.png).`n"; Line = 3; Expect = 'is private'; Private = $true }
+		@{ Name = 'a link to an image the docs do not have'; Text = "# Title`n`nSee [it](Images/None.png).`n"; Line = 3; Expect = 'Link Images/None.png is broken' }
+		@{ Name = 'a link to an image with the wrong case'; Text = "# Title`n`nSee [it](images/shot.png).`n"; Line = 3; Expect = 'wrong case: the file is Images/Shot.png' }
+		@{ Name = 'an image with a query'; Text = "# Title`n`n![Shot](Images/Shot.png?v=2)`n"; Line = 3; Expect = 'has a ? or #' }
+		@{ Name = 'an image with a fragment'; Text = "# Title`n`n![Shot](Images/Shot.png#gh-dark-mode-only)`n"; Line = 3; Expect = 'has a ? or #' }
+		@{ Name = 'a full link to a page these docs do not have'; Text = "# Title`n`nSee [it](https://docs.khaos.systems/unreal/sample-docs/nope/).`n"; Line = 3; Expect = 'these docs have no page there' }
+		@{ Name = "a full link to a page this version's docs do not have"; Text = "# Title`n`nSee [it](https://docs.khaos.systems/unreal/sample-docs/v1.2.3/nope/).`n"; Line = 3; Expect = 'these docs have no page there' }
+		@{ Name = 'a full link to an image, which the site keeps elsewhere'; Text = "# Title`n`nSee [it](http://Docs.Khaos.Systems/unreal/sample-docs/Images/Shot.png).`n"; Line = 3; Expect = 'these docs have no page there' }
+		@{ Name = 'a URL in the text to a page these docs do not have'; Text = "# Title`n`nSee https://docs.khaos.systems/unreal/sample-docs/guides/nope/.`n"; Line = 3; Expect = 'these docs have no page there' }
+		@{ Name = 'a definition of a full link to a page these docs do not have'; Text = "# Title`n`nSee [it].`n`n[it]: https://docs.khaos.systems/unreal/sample-docs/nope`n"; Line = 5; Expect = 'these docs have no page there' }
+		@{ Name = 'a link whose target holds a no-break space'; Text = "# Title`n`nSee [it](Miss$([char]0xA0)ing.md).`n"; Line = 3; Expect = 'is broken' }
+		@{ Name = 'an image whose path holds an ideographic space'; Text = "# Title`n`n![it](Images/Sh$([char]0x3000)ot.png)`n"; Line = 3; Expect = 'is broken' }
+		@{ Name = 'a link after a line of only a no-break space, which carries on the paragraph'; Text = "# Title`n`nText`n$([char]0xA0)`n    [it](Missing.md)`n"; Line = 5; Expect = 'is broken' }
 	)
 	foreach ($Rule in $Rules)
 	{
@@ -998,6 +1018,20 @@ try
 		@{ Name = 'a link split across table cells'; Text = "# Title`n`n| a | b |`n|---|---|`n| [x | y](Missing.md) |`n" }
 		@{ Name = 'a table of one column, with a colon'; Text = "# Title`n`nName`n:---`n" }
 		@{ Name = 'a pointed link target that looks like a tag'; Text = "# Title`n`nSee [it](<First Steps.md>).`n"; Files = @('First Steps.md') }
+		@{ Name = 'a link to an image in the docs, in a private repository'; Text = "# Title`n`nSee [it](Images/Shot.png).`n"; Private = $true }
+		@{ Name = 'full links to pages of these docs, and to other products and versions'; Text = (@(
+			'# Title'
+			''
+			'See [a](https://docs.khaos.systems/unreal/sample-docs), [b](https://docs.khaos.systems/unreal/sample-docs/guides/setup/#install),'
+			'[c](http://docs.khaos.systems/unreal/sample-docs/v1.2.3/guides/setup), [d](https://docs.khaos.systems/unreal/sample-docs/guides/setup/index.md),'
+			'[e](https://docs.khaos.systems/unreal/sample-docs/index.html), [f](https://docs.khaos.systems/unreal/other/nope/),'
+			'[g](https://docs.khaos.systems/unreal/sample-docs/v1.0.0/gone/), [h](https://docs.khaos.systems/unreal/sample-docs/preview/gone/),'
+			'[i](https://docs.khaos.systems.example.com/unreal/sample-docs/nope/) and https://docs.khaos.systems/unreal/sample-docs/guides/setup/.'
+			''
+			'In code and link text: `https://docs.khaos.systems/unreal/sample-docs/nope/`, [https://docs.khaos.systems/unreal/sample-docs/nope/](Sample.md)'
+			'and a URL in parentheses (see https://docs.khaos.systems/unreal/sample-docs/guides/setup/).'
+		) -join "`n") }
+		@{ Name = 'a line of only a no-break space between a paragraph and indented code'; Text = "# Title`n`nText`n$([char]0xA0)`n    [it](Sample.md)`n" }
 	)
 	foreach ($Case in $Valid)
 	{
@@ -1034,6 +1068,11 @@ try
 		@{ Find = '"released": "2026-11-09"'; Replace = '"released": "11/09/2026"'; Expect = '"released" must be a date' }
 		@{ Find = '"commit": "[0-9a-f]+"'; Replace = '"commit": "abc123"'; Expect = '"commit" must be a full 40-character SHA.' }
 		@{ Find = '"repo": "Example/SampleDocs"'; Replace = '"repo": "x"'; Expect = '"repo" must be owner/name.' }
+		@{ Find = '"released": "2026-11-09"'; Replace = '"released": "2026-13-45"'; Expect = '"released" must be a date' }
+		@{ Find = '"released": "2026-11-09"'; Replace = '"released": "2026-02-29"'; Expect = '"released" must be a date' }
+		@{ Find = '"landing": "Sample.md"'; Replace = '"landing": "Images/Shot.png"'; Expect = '"landing" must be a .md page, not Images/Shot.png.' }
+		@{ Find = '"description": "A sample plugin."'; Replace = ('"description": "' + [char]0xFEFF + '"'); Expect = '"description" is empty.' }
+		@{ Find = '"name": "Example Sample Kit"'; Replace = ('"name": "' + [char]0x3000 + '"'); Expect = '"name" is empty.' }
 		@{ Find = '"version": "1.2.3"'; Replace = '"version": "v1.2.3"'; Expect = "version 'v1.2.3' is not a release version" }
 		@{ Find = '"preview": false'; Replace = '"preview": true'; Expect = 'a preview has "version": null.' }
 		@{ Find = '"private": false'; Replace = '"private": "no"'; Expect = '"private" must be true or false.' }
@@ -1076,6 +1115,12 @@ try
 	$FileRules = @(
 		@{ Name = 'an image over 5 MB'; Add = { New-TestPng "$($Bundle.Dir)\Images\Big.png" 5000001 }; Expect = 'file=Docs/Images/Big.png,title=Docs::The image is over the 5 MB limit (5,000,001 bytes).' }
 		@{ Name = 'a bundle over 25 MB'; Add = { foreach ($N in 1..6) { New-TestPng "$($Bundle.Dir)\Images\Part$N.png" 4500000 } }; Expect = 'title=Docs::The docs are over the 25 MB limit (27,0' }
+		@{ Name = 'a name that starts with .'; Add = { New-TestFile "$($Bundle.Dir)\.notes\Draft.md" "# Draft`n" }; Expect = 'file=Docs/.notes/Draft.md,title=Docs::The docs site does not publish files or folders whose names start with "."' }
+		@{ Name = 'a # in a name'; Add = { New-TestFile "$($Bundle.Dir)\C# Notes.md" "# C`n" }; Expect = 'file=Docs/C# Notes.md,title=Docs::Rename it: the docs site takes no "#" or "?"' }
+		@{ Name = 'a PNG cut short after its header'; Add = { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Images\Cut.png", [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUg==')) }; Expect = 'file=Docs/Images/Cut.png,title=Docs::The docs site cannot read the size of this image' }
+		@{ Name = 'a JPEG with no frame'; Add = { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Images\Junk.jpg", [byte[]](@(0xFF, 0xD8, 0xFF, 0xE0) + @(0x41) * 64)) }; Expect = 'file=Docs/Images/Junk.jpg,title=Docs::The docs site cannot read the size of this image' }
+		@{ Name = 'a JPEG whose Exif block is cut short'; Add = { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Images\Exif.jpg", [byte[]](@(0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x0C) + [Text.Encoding]::ASCII.GetBytes('Exif') + @(0, 0, 0x4D, 0x4D, 0, 0, 0xFF, 0xC0, 0, 0x11, 8, 0, 1, 0, 1))) }; Expect = 'file=Docs/Images/Exif.jpg,title=Docs::The docs site cannot read the size of this image' }
+		@{ Name = 'a WebP cut short'; Add = { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Images\Cut.webp", [Text.Encoding]::ASCII.GetBytes('RIFF0000WEBPVP8 0000')) }; Expect = 'file=Docs/Images/Cut.webp,title=Docs::The docs site cannot read the size of this image' }
 		@{ Name = 'an image that is not one'; Add = { New-TestFile "$($Bundle.Dir)\Images\Text.png" 'png' }; Expect = 'file=Docs/Images/Text.png,title=Docs::The docs site cannot read this image: it is not a PNG, JPEG, GIF or WebP file.' }
 		@{ Name = 'a Git LFS pointer'; Add = { New-TestFile "$($Bundle.Dir)\Images\Lfs.png" "version https://git-lfs.github.com/spec/v1`noid sha256:0123`nsize 12`n" }; Expect = 'file=Docs/Images/Lfs.png,title=Docs::This is a Git LFS pointer' }
 		@{ Name = 'an SVG with no size'; Add = { New-TestFile "$($Bundle.Dir)\Images\NoSize.svg" "<svg xmlns='http://www.w3.org/2000/svg'>`n</svg>`n" }; Expect = 'file=Docs/Images/NoSize.svg,title=Docs::The docs site cannot read the size of this SVG' }
@@ -1119,9 +1164,13 @@ try
 
 	# Images the site reads, whatever their extension: by the bytes they start with, and SVGs by their size.
 	$Readable = @{
-		'Jpeg.jpg' = [byte[]](0xFF, 0xD8, 0xFF, 0xE0)
+		# A JFIF header, then a frame header giving 1 x 1.
+		'Jpeg.jpg' = [byte[]](@(0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10) + [Text.Encoding]::ASCII.GetBytes('JFIF') + @(0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xFF, 0xC0, 0, 0x11, 8, 0, 1, 0, 1))
+		# A JPEG whose Exif block gives an orientation.
+		'Exif.jpg' = [byte[]](@(0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x22) + [Text.Encoding]::ASCII.GetBytes('Exif') + @(0, 0, 0x4D, 0x4D, 0, 0x2A, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0, 0xFF, 0xC0, 0, 0x11, 8, 0, 1, 0, 1))
+		'Lossless.webp' = [byte[]]([Text.Encoding]::ASCII.GetBytes('RIFF0000WEBPVP8L0000') + @(0x2F, 0, 0, 0, 0))
 		'Gif.gif' = [Text.Encoding]::ASCII.GetBytes('GIF89a0000')
-		'Webp.webp' = [Text.Encoding]::ASCII.GetBytes('RIFF0000WEBPVP8 0000')
+		'Webp.webp' = [byte[]]([Text.Encoding]::ASCII.GetBytes('RIFF0000WEBPVP8 0000') + @(0, 0, 0, 0x9D, 0x01, 0x2A, 1, 0, 1, 0))
 		'PngAsJpeg.jpeg' = [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ')
 		'Sized.svg' = [Text.Encoding]::ASCII.GetBytes("<?xml version='1.0'?>`n<svg width='10px' height='2em'></svg>`n")
 		'Wide.svg' = [Text.Encoding]::ASCII.GetBytes("<svg xmlns='http://www.w3.org/2000/svg' width='10' viewBox='0 0 10 5'></svg>`n")
