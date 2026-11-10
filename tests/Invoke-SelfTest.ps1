@@ -78,8 +78,9 @@ function New-FixturePlugin([string]$Dir)
 	New-TestFile "$Dir\Source\SampleEditor\Private\SampleEditor.cpp" "// Copyright 2026 Example Studio. All Rights Reserved.`n"
 	New-TestFile "$Dir\Source\ThirdParty\Lib\lib.h" "/* MIT, someone else */`n"
 	New-TestFile "$Dir\Source\ThirdParty\Lib\LICENSE.txt" "MIT`n"
-	New-TestFile "$Dir\Content\Docs\Readme.md" "# Sample`n"
-	New-TestFile "$Dir\Config\FilterPlugin.ini" "[FilterPlugin]`n; comment`n/Extras/...`n-/Extras/Private/...`n"
+	New-TestFile "$Dir\Content\Sample.uasset" "uasset"
+	New-TestFile "$Dir\Docs\Readme.md" "# Sample`n"
+	New-TestFile "$Dir\Config\FilterPlugin.ini" "[FilterPlugin]`n; comment`n/Docs/...`n/Extras/...`n-/Extras/Private/...`n"
 	New-TestFile "$Dir\Resources\Icon128.png" "png"
 	New-TestFile "$Dir\Extras\Notes.txt" "extra"
 	New-TestFile "$Dir\Extras\Private\Secret.txt" "secret"
@@ -165,8 +166,8 @@ function New-DocsFixture([string]$Dir)
 	$Text = Set-DescriptorField $Text 'FriendlyName' 'Example Sample Kit'
 	[IO.File]::WriteAllText($Descriptor, (Set-DescriptorField $Text 'SupportURL' 'https://example.com/support'))
 
-	Remove-Item "$Dir\Content\Docs\Readme.md"
-	New-TestFile "$Dir\Content\Docs\Sample.md" (@(
+	Remove-Item "$Dir\Docs\Readme.md"
+	New-TestFile "$Dir\Docs\Sample.md" (@(
 		'# Sample'
 		''
 		'Start with [setup](Guides/Setup.md#install), [the site](https://example.com) or <https://example.com/a>.'
@@ -175,7 +176,7 @@ function New-DocsFixture([string]$Dir)
 		''
 		'## Usage'
 		''
-		'Read [the source](../../Source/SampleEditor/Private/SampleEditor.cpp), [mail us](mailto:a@example.com) or [jump](#usage).'
+		'Read [the source](../Source/SampleEditor/Private/SampleEditor.cpp), [mail us](mailto:a@example.com) or [jump](#usage).'
 		'Inline `<code>` and `[not](/a/link)` are fine, as are a \<escaped> tag, <a@example.com> and [a badge ![b](Images/Shot.png)](https://example.com).'
 		''
 		'```ini'
@@ -201,13 +202,13 @@ function New-DocsFixture([string]$Dir)
 		''
 		'[guide]: <Guides/Setup.md>'
 	) -join "`r`n")
-	New-TestFile "$Dir\Content\Docs\Guides\Setup.md" ''
+	New-TestFile "$Dir\Docs\Guides\Setup.md" ''
 	# With a byte order mark, as Visual Studio saves it.
-	[IO.File]::WriteAllText("$Dir\Content\Docs\Guides\Setup.md", "# Setup`n`n## Install`n`nBack to [Sample](../Sample.md), with its ![shot](../Images/Shot.png).`n", (New-Object System.Text.UTF8Encoding $true))
-	New-TestPng "$Dir\Content\Docs\Images\Shot.png"
-	New-TestFile "$Dir\Content\Docs\Images\Logo.svg" "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>`r`n</svg>`r`n"
-	New-TestFile "$Dir\Content\Docs\Images\Thumbs.db" 'junk'
-	New-TestFile "$Dir\Content\Docs\Notes.txt" 'notes'
+	[IO.File]::WriteAllText("$Dir\Docs\Guides\Setup.md", "# Setup`n`n## Install`n`nBack to [Sample](../Sample.md), with its ![shot](../Images/Shot.png).`n", (New-Object System.Text.UTF8Encoding $true))
+	New-TestPng "$Dir\Docs\Images\Shot.png"
+	New-TestFile "$Dir\Docs\Images\Logo.svg" "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>`r`n</svg>`r`n"
+	New-TestFile "$Dir\Docs\Images\Thumbs.db" 'junk'
+	New-TestFile "$Dir\Docs\Notes.txt" 'notes'
 }
 
 function Test-Fixture([string]$Dir)
@@ -262,7 +263,8 @@ try
 	$Files = Get-PluginPackageFiles (Get-PluginDescriptor $Plugin)
 	$Expected = @(
 		'Config/FilterPlugin.ini'
-		'Content/Docs/Readme.md'
+		'Content/Sample.uasset'
+		'Docs/Readme.md'
 		'Extras/Notes.txt'
 		'Resources/Icon128.png'
 		'Sample.uplugin'
@@ -374,7 +376,7 @@ try
 	$Files = Get-PluginPackageFiles (Get-PluginDescriptor $Plugin)
 	New-PluginZip -SourceDir $Plugin -Files $Files -RootFolder 'Sample' -ZipPath "$Temp\a.zip"
 	Start-Sleep -Milliseconds 1100
-	(Get-Item "$Plugin\Content\Docs\Readme.md").LastWriteTime = Get-Date
+	(Get-Item "$Plugin\Docs\Readme.md").LastWriteTime = Get-Date
 	New-PluginZip -SourceDir $Plugin -Files $Files -RootFolder 'Sample' -ZipPath "$Temp\b.zip"
 	Check 'same sources give the same bytes' ((Get-FileSha256 "$Temp\a.zip") -eq (Get-FileSha256 "$Temp\b.zip"))
 
@@ -421,11 +423,11 @@ try
 	$ContentPlugin = Join-Paths $Temp 'ContentPlugin'
 	New-Item -ItemType Directory -Path "$ContentPlugin\Content\Maps" -Force | Out-Null
 	[IO.File]::WriteAllBytes("$ContentPlugin\Content\Maps\L_Demo.umap", $Package.ToArray())
-	New-TestFile "$ContentPlugin\Content\Docs\Readme.md" "# not a package`n"
+	New-TestFile "$ContentPlugin\Content\Readme.md" "# not a package`n"
 
 	$Saved = @(Get-UnrealPackageCustomVersions "$ContentPlugin\Content\Maps\L_Demo.umap")
 	Check 'reads the custom versions a package was saved with' ($Saved.Count -eq 2 -and $Saved[0].Key -eq '601D1886-AC644F84-AA16D3DE-0DEAC7D6' -and $Saved[0].Version -eq 268) ($Saved | Out-String)
-	Check 'a file that is not a package has none' (@(Get-UnrealPackageCustomVersions "$ContentPlugin\Content\Docs\Readme.md").Count -eq 0)
+	Check 'a file that is not a package has none' (@(Get-UnrealPackageCustomVersions "$ContentPlugin\Content\Readme.md").Count -eq 0)
 
 	function New-FakeEngineSource([string]$Root, [int]$Latest)
 	{
@@ -676,13 +678,13 @@ try
 	$Bundle = $script:Bundle
 	Check 'the bundle goes in section/slug/version, the slug from the repository name' ($Bundle.Folder -eq 'unreal/sample-docs/1.2.3' -and $Bundle.Dir -eq (Join-Paths $DocsOut 'unreal' 'sample-docs' '1.2.3'))
 	Check 'pages and images keep their paths' (Same $Bundle.Files @('Guides/Setup.md', 'Images/Logo.svg', 'Images/Shot.png', 'Sample.md', 'docs.json')) ($Bundle.Files -join ', ')
-	Check 'a file of another type is left out with a warning' ($Annotations.Count -eq 1 -and $Annotations[0] -like '::warning file=Content/Docs/Notes.txt,title=Docs::*.txt*') ($Annotations -join "`n")
+	Check 'a file of another type is left out with a warning' ($Annotations.Count -eq 1 -and $Annotations[0] -like '::warning file=Docs/Notes.txt,title=Docs::*.txt*') ($Annotations -join "`n")
 	Check 'Markdown and SVG get LF line endings' ([Array]::IndexOf([IO.File]::ReadAllBytes("$($Bundle.Dir)\Sample.md"), [byte]13) -lt 0 -and [Array]::IndexOf([IO.File]::ReadAllBytes("$($Bundle.Dir)\Images\Logo.svg"), [byte]13) -lt 0)
 	Check 'Markdown loses its byte order mark' ([IO.File]::ReadAllBytes("$($Bundle.Dir)\Guides\Setup.md")[0] -eq [byte][char]'#')
 
 	$Golden = @'
 {
-  "base": "Content/Docs",
+  "base": "Docs",
   "commit": "0123456789abcdef0123456789abcdef01234567",
   "description": "A sample plugin.",
   "fabUrl": "https://www.fab.com/listings/00000000-0000-0000-0000-000000000000",
@@ -739,7 +741,7 @@ try
 	$Hashes = @($Bundle.Files | ForEach-Object { Get-FileSha256 (Join-Paths $Bundle.Dir $_) })
 	$ZipHash = Get-FileSha256 $Zip
 	Start-Sleep -Milliseconds 1100
-	(Get-Item "$Plugin\Content\Docs\Sample.md").LastWriteTime = Get-Date
+	(Get-Item "$Plugin\Docs\Sample.md").LastWriteTime = Get-Date
 	$null = Get-Annotations { $script:Bundle = New-DocsBundle @BundleArguments }
 	$Zip = New-DocsBundleZip -BundleDir $Bundle.Dir -OutDir "$Temp\docs-zip"
 	Check 'the same docs give the same bundle, byte for byte' ((Same @($Bundle.Files | ForEach-Object { Get-FileSha256 (Join-Paths $Bundle.Dir $_) }) $Hashes) -and (Get-FileSha256 $Zip) -eq $ZipHash)
@@ -784,16 +786,16 @@ try
 	$Path = "$Edge\Sample.uplugin"
 	$Text = Set-DescriptorField ([IO.File]::ReadAllText($Path)) 'SupportURL' 'support@example.com'
 	[IO.File]::WriteAllText($Path, [regex]::Replace($Text, '"FabURL": "[^"]*"', '"FabURL": "https://example.com/fab\n"'))
-	[IO.File]::WriteAllText("$Edge\Content\Docs\Images\Wide.svg", "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'></svg>`n", (New-Object System.Text.UnicodeEncoding $false, $true))
-	New-TestFile "$Edge\Content\Docs\Upper.MD" "# Upper`n"
-	[IO.File]::WriteAllText("$Edge\Content\Docs\Wide.md", "# Wide`r`n`r`nCaf$([char]0xE9).`r`n", (New-Object System.Text.UnicodeEncoding $false, $true))
-	New-TestFile "$Edge\Content\Docs\Mac.md" "# Mac`r`rOld line endings.`r"
+	[IO.File]::WriteAllText("$Edge\Docs\Images\Wide.svg", "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'></svg>`n", (New-Object System.Text.UnicodeEncoding $false, $true))
+	New-TestFile "$Edge\Docs\Upper.MD" "# Upper`n"
+	[IO.File]::WriteAllText("$Edge\Docs\Wide.md", "# Wide`r`n`r`nCaf$([char]0xE9).`r`n", (New-Object System.Text.UnicodeEncoding $false, $true))
+	New-TestFile "$Edge\Docs\Mac.md" "# Mac`r`rOld line endings.`r"
 	$script:Other = $null
 	$Annotations = @(Get-Annotations { $script:Other = New-DocsBundle -PluginDir $Edge -OutDir "$Temp\docs-edge-out" -Ref 'main' -Commit $Commit -Repo 'Example/Edge' -Released '2026-11-09' })
 	Check 'a SupportURL that is not an http(s) URL is left out, with a warning' ($null -eq $script:Other.Manifest.supportUrl -and @($Annotations | Where-Object { $_ -like '::warning file=Sample.uplugin,title=Docs::SupportURL is not an http(s) URL*' }).Count -eq 1) ($Annotations -join "`n")
 	Check 'so is a FabURL that ends in a line break' ($null -eq $script:Other.Manifest.fabUrl -and @($Annotations | Where-Object { $_ -like '::warning file=Sample.uplugin,title=Docs::FabURL is not an http(s) URL*' }).Count -eq 1) ($Annotations -join "`n")
-	Check 'a UTF-16 SVG is left out, with a warning' (@($Annotations | Where-Object { $_ -like '::warning file=Content/Docs/Images/Wide.svg,title=Docs::*UTF-16*' }).Count -eq 1) ($Annotations -join "`n")
-	Check 'a page ending in .MD is left out, with a warning' ((Same $script:Other.Files @('Guides/Setup.md', 'Images/Logo.svg', 'Images/Shot.png', 'Mac.md', 'Sample.md', 'Wide.md', 'docs.json')) -and @($Annotations | Where-Object { $_ -like '::warning file=Content/Docs/Upper.MD,title=Docs::*in lowercase*' }).Count -eq 1) ($Annotations -join "`n")
+	Check 'a UTF-16 SVG is left out, with a warning' (@($Annotations | Where-Object { $_ -like '::warning file=Docs/Images/Wide.svg,title=Docs::*UTF-16*' }).Count -eq 1) ($Annotations -join "`n")
+	Check 'a page ending in .MD is left out, with a warning' ((Same $script:Other.Files @('Guides/Setup.md', 'Images/Logo.svg', 'Images/Shot.png', 'Mac.md', 'Sample.md', 'Wide.md', 'docs.json')) -and @($Annotations | Where-Object { $_ -like '::warning file=Docs/Upper.MD,title=Docs::*in lowercase*' }).Count -eq 1) ($Annotations -join "`n")
 	Check 'a UTF-16 page becomes UTF-8' (Same ([IO.File]::ReadAllBytes("$($script:Other.Dir)\Wide.md")) ((New-Object System.Text.UTF8Encoding $false).GetBytes("# Wide`n`nCaf$([char]0xE9).`n")))
 	Check 'CR line endings become LF' ([IO.File]::ReadAllText("$($script:Other.Dir)\Mac.md") -ceq "# Mac`n`nOld line endings.`n")
 	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $script:Other.Dir }
@@ -807,8 +809,8 @@ try
 	# A private repository's docs: the sample without its link to a source file.
 	$PrivatePlugin = Join-Paths $Temp 'docs-private-src'
 	New-DocsFixture $PrivatePlugin
-	$Page = "$PrivatePlugin\Content\Docs\Sample.md"
-	[IO.File]::WriteAllText($Page, [IO.File]::ReadAllText($Page).Replace('[the source](../../Source/SampleEditor/Private/SampleEditor.cpp), ', ''))
+	$Page = "$PrivatePlugin\Docs\Sample.md"
+	[IO.File]::WriteAllText($Page, [IO.File]::ReadAllText($Page).Replace('[the source](../Source/SampleEditor/Private/SampleEditor.cpp), ', ''))
 	$PrivateArguments = $BundleArguments.Clone()
 	$PrivateArguments.PluginDir = $PrivatePlugin
 	$PrivateArguments.OutDir = Join-Paths $Temp 'docs-private'
@@ -857,7 +859,7 @@ try
 		@{ Name = 'raw HTML on a lazy line'; Text = "# Title`n`n> A quote`n    <b>bold</b>`n"; Line = 4; Expect = 'Raw HTML' }
 		@{ Name = 'a link with no target'; Text = "# Title`n`nSee [x]().`n"; Line = 3; Expect = 'Link with no target.' }
 		@{ Name = 'a link to a missing page, spelled with an entity'; Text = "# Title`n`nSee [it](Missing&#46;md).`n"; Line = 3; Expect = 'is broken' }
-		@{ Name = 'a % that starts no escape, in a link'; Text = "# Title`n`nSee [it](../../Source/100%.h).`n"; Line = 3; Expect = 'is not a valid link' }
+		@{ Name = 'a % that starts no escape, in a link'; Text = "# Title`n`nSee [it](../Source/100%.h).`n"; Line = 3; Expect = 'is not a valid link' }
 		@{ Name = 'a % that starts no escape, in an image'; Text = "# Title`n`n![Shot](Images/100%.png)`n"; Line = 3; Expect = 'is not a valid link' }
 		@{ Name = 'escapes that are not UTF-8'; Text = "# Title`n`nSee [it](Sample%C3.md).`n"; Line = 3; Expect = 'is not a valid link' }
 		@{ Name = 'a broken link'; Text = "# Title`n`nSee [it](Missing.md).`n"; Line = 3; Expect = 'is broken' }
@@ -885,14 +887,14 @@ try
 		@{ Name = 'an image that is a folder'; Text = "# Title`n`n![a](Images)`n"; Line = 3; Expect = 'Image Images is broken' }
 		@{ Name = 'an image that is a folder, with a slash'; Text = "# Title`n`n![a](Images/)`n"; Line = 3; Expect = 'Image Images/ is broken' }
 		@{ Name = 'a root-relative image'; Text = "# Title`n`n![Shot](/Images/Shot.png)`n"; Line = 3; Expect = 'is root-relative. Write it relative to this page.' }
-		@{ Name = 'an image outside the bundle'; Text = "# Title`n`n![Icon](../../Resources/Icon128.png)`n"; Line = 3; Expect = 'outside the docs folder' }
+		@{ Name = 'an image outside the bundle'; Text = "# Title`n`n![Icon](../Resources/Icon128.png)`n"; Line = 3; Expect = 'outside the docs folder' }
 		@{ Name = 'an image one folder above the bundle'; Text = "# Title`n`n![Icon](../Icon.png)`n"; Line = 3; Expect = 'outside the docs folder' }
 		@{ Name = 'a missing image'; Text = "# Title`n`n![Shot](Images/None.png)`n"; Line = 3; Expect = 'is broken' }
 		@{ Name = 'a root-relative link'; Text = "# Title`n`nSee [the docs](/unreal/sample-docs/).`n"; Line = 3; Expect = 'root-relative' }
 		@{ Name = 'a link of another scheme'; Text = "# Title`n`nSee [files](ftp://example.com/x).`n"; Line = 3; Expect = 'only http(s), mailto, #anchor and relative links' }
 		@{ Name = 'an autolink of another scheme'; Text = "# Title`n`nSee <ftp://example.com/x>.`n"; Line = 3; Expect = 'only http(s), mailto' }
-		@{ Name = 'a link out of the repository'; Text = "# Title`n`nSee [x](../../../../x.txt).`n"; Line = 3; Expect = 'outside the repository' }
-		@{ Name = 'a link from a private repository to a source file'; Text = "# Title`n`nSee [it](../../Source/SampleEditor/Private/SampleEditor.cpp).`n"; Line = 3; Expect = 'is private'; Private = $true }
+		@{ Name = 'a link out of the repository'; Text = "# Title`n`nSee [x](../../x.txt).`n"; Line = 3; Expect = 'outside the repository' }
+		@{ Name = 'a link from a private repository to a source file'; Text = "# Title`n`nSee [it](../Source/SampleEditor/Private/SampleEditor.cpp).`n"; Line = 3; Expect = 'is private'; Private = $true }
 		@{ Name = 'a link from a private repository to an image file'; Text = "# Title`n`nSee [it](Images/Shot.png).`n"; Line = 3; Expect = 'is private'; Private = $true }
 	)
 	foreach ($Rule in $Rules)
@@ -903,7 +905,7 @@ try
 		$script:Result = $null
 		$Annotations = Get-Annotations { $script:Result = Test-DocsBundle -BundleDir $Dir }
 		Remove-Item "$Dir\Bad.md"
-		$Hit = @($Annotations | Where-Object { $_.StartsWith("::error file=Content/Docs/Bad.md,line=$($Rule.Line),title=Docs::") -and $_.Contains($Rule.Expect) })
+		$Hit = @($Annotations | Where-Object { $_.StartsWith("::error file=Docs/Bad.md,line=$($Rule.Line),title=Docs::") -and $_.Contains($Rule.Expect) })
 		Check "reports $($Rule.Name)" ($Hit.Count -gt 0 -and $script:Result.Errors -gt 0) ($Annotations -join "`n")
 	}
 
@@ -946,7 +948,7 @@ try
 		Check "passes $($Case.Name)" ($Annotations.Count -eq 0) ($Annotations -join "`n")
 	}
 
-	New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`nSee [it](../../Source/SampleEditor/Private/SampleEditor.cpp).`n"
+	New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`nSee [it](../Source/SampleEditor/Private/SampleEditor.cpp).`n"
 	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
 	Remove-Item "$($Bundle.Dir)\Bad.md"
 	Check 'a public repository may link its other files' ($Annotations.Count -eq 0) ($Annotations -join "`n")
@@ -955,7 +957,7 @@ try
 	$script:Result = $null
 	$Annotations = @(Get-Annotations { $script:Result = Test-DocsBundle -BundleDir $Bundle.Dir -AsWarnings })
 	Remove-Item "$($Bundle.Dir)\Bad.md"
-	Check 'with -AsWarnings problems are warnings, and still counted' ($Annotations.Count -eq 1 -and $Annotations[0] -like '::warning file=Content/Docs/Bad.md,line=3,*' -and $script:Result.Errors -eq 1) ($Annotations -join "`n")
+	Check 'with -AsWarnings problems are warnings, and still counted' ($Annotations.Count -eq 1 -and $Annotations[0] -like '::warning file=Docs/Bad.md,line=3,*' -and $script:Result.Errors -eq 1) ($Annotations -join "`n")
 
 	$Json = [IO.File]::ReadAllText("$($Bundle.Dir)\docs.json")
 	$JsonRules = @(
@@ -1005,31 +1007,31 @@ try
 	Write-Utf8File "$($Bundle.Dir)\docs.json" $Json
 
 	$FileRules = @(
-		@{ Name = 'an image over 5 MB'; Add = { New-TestPng "$($Bundle.Dir)\Images\Big.png" 5000001 }; Expect = 'file=Content/Docs/Images/Big.png,title=Docs::The image is over the 5 MB limit (5,000,001 bytes).' }
+		@{ Name = 'an image over 5 MB'; Add = { New-TestPng "$($Bundle.Dir)\Images\Big.png" 5000001 }; Expect = 'file=Docs/Images/Big.png,title=Docs::The image is over the 5 MB limit (5,000,001 bytes).' }
 		@{ Name = 'a bundle over 25 MB'; Add = { foreach ($N in 1..6) { New-TestPng "$($Bundle.Dir)\Images\Part$N.png" 4500000 } }; Expect = 'title=Docs::The docs are over the 25 MB limit (27,0' }
-		@{ Name = 'an image that is not one'; Add = { New-TestFile "$($Bundle.Dir)\Images\Text.png" 'png' }; Expect = 'file=Content/Docs/Images/Text.png,title=Docs::The docs site cannot read this image: it is not a PNG, JPEG, GIF or WebP file.' }
-		@{ Name = 'a Git LFS pointer'; Add = { New-TestFile "$($Bundle.Dir)\Images\Lfs.png" "version https://git-lfs.github.com/spec/v1`noid sha256:0123`nsize 12`n" }; Expect = 'file=Content/Docs/Images/Lfs.png,title=Docs::This is a Git LFS pointer' }
-		@{ Name = 'an SVG with no size'; Add = { New-TestFile "$($Bundle.Dir)\Images\NoSize.svg" "<svg xmlns='http://www.w3.org/2000/svg'>`n</svg>`n" }; Expect = 'file=Content/Docs/Images/NoSize.svg,title=Docs::The docs site cannot read the size of this SVG' }
-		@{ Name = 'an SVG whose tag starts after 1000 bytes'; Add = { New-TestFile "$($Bundle.Dir)\Images\Late.svg" ("<!-- " + ('x' * 1000) + " -->`n<svg viewBox='0 0 1 1'></svg>`n") }; Expect = 'file=Content/Docs/Images/Late.svg,title=Docs::The docs site cannot read this SVG' }
-		@{ Name = 'a UTF-16 SVG in a bundle'; Add = { [IO.File]::WriteAllText("$($Bundle.Dir)\Images\Wide.svg", "<svg viewBox='0 0 1 1'></svg>`n", (New-Object System.Text.UnicodeEncoding $false, $true)) }; Expect = 'file=Content/Docs/Images/Wide.svg,title=Docs::The SVG is saved as UTF-16' }
-		@{ Name = 'a link to a folder named like a page'; Add = { New-TestFile "$($Bundle.Dir)\Dir.md\Page.md" "# Page`n"; New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`nSee [it](Dir.md).`n" }; Expect = 'file=Content/Docs/Bad.md,line=3,title=Docs::Link Dir.md is broken' }
-		@{ Name = 'a landing page that is a folder'; Add = { Remove-Item "$($Bundle.Dir)\Sample.md"; New-TestFile "$($Bundle.Dir)\Sample.md\Page.md" "# Page`n" }; Expect = 'The landing page Content/Docs/Sample.md is missing' }
+		@{ Name = 'an image that is not one'; Add = { New-TestFile "$($Bundle.Dir)\Images\Text.png" 'png' }; Expect = 'file=Docs/Images/Text.png,title=Docs::The docs site cannot read this image: it is not a PNG, JPEG, GIF or WebP file.' }
+		@{ Name = 'a Git LFS pointer'; Add = { New-TestFile "$($Bundle.Dir)\Images\Lfs.png" "version https://git-lfs.github.com/spec/v1`noid sha256:0123`nsize 12`n" }; Expect = 'file=Docs/Images/Lfs.png,title=Docs::This is a Git LFS pointer' }
+		@{ Name = 'an SVG with no size'; Add = { New-TestFile "$($Bundle.Dir)\Images\NoSize.svg" "<svg xmlns='http://www.w3.org/2000/svg'>`n</svg>`n" }; Expect = 'file=Docs/Images/NoSize.svg,title=Docs::The docs site cannot read the size of this SVG' }
+		@{ Name = 'an SVG whose tag starts after 1000 bytes'; Add = { New-TestFile "$($Bundle.Dir)\Images\Late.svg" ("<!-- " + ('x' * 1000) + " -->`n<svg viewBox='0 0 1 1'></svg>`n") }; Expect = 'file=Docs/Images/Late.svg,title=Docs::The docs site cannot read this SVG' }
+		@{ Name = 'a UTF-16 SVG in a bundle'; Add = { [IO.File]::WriteAllText("$($Bundle.Dir)\Images\Wide.svg", "<svg viewBox='0 0 1 1'></svg>`n", (New-Object System.Text.UnicodeEncoding $false, $true)) }; Expect = 'file=Docs/Images/Wide.svg,title=Docs::The SVG is saved as UTF-16' }
+		@{ Name = 'a link to a folder named like a page'; Add = { New-TestFile "$($Bundle.Dir)\Dir.md\Page.md" "# Page`n"; New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`nSee [it](Dir.md).`n" }; Expect = 'file=Docs/Bad.md,line=3,title=Docs::Link Dir.md is broken' }
+		@{ Name = 'a landing page that is a folder'; Add = { Remove-Item "$($Bundle.Dir)\Sample.md"; New-TestFile "$($Bundle.Dir)\Sample.md\Page.md" "# Page`n" }; Expect = 'The landing page Docs/Sample.md is missing' }
 		# PowerShell's -ceq takes each of these pairs for the same name; git and the site do not.
 		@{ Name = 'a link to a sharp s, beside a file spelled ss'; Add = { New-TestFile "$($Bundle.Dir)\Strasse.md" "# Strasse`n"; New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`nSee [it](Stra$([char]0xDF)e.md).`n" }; Expect = "line=3,title=Docs::Link Stra$([char]0xDF)e.md is broken" }
 		@{ Name = 'a link to a composed accent, beside a file with a combining one'; Add = { New-TestFile "$($Bundle.Dir)\Cafe$([char]0x301).md" "# Cafe`n"; New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`nSee [it](Caf$([char]0xE9).md).`n" }; Expect = "line=3,title=Docs::Link Caf$([char]0xE9).md is broken" }
 		@{ Name = 'an image with a soft hyphen in its name'; Add = { New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`n![it](Images/Sh$([char]0xAD)ot.png)`n" }; Expect = "line=3,title=Docs::Image Images/Sh$([char]0xAD)ot.png is broken" }
-		@{ Name = 'a file type a bundle cannot hold'; Add = { New-TestFile "$($Bundle.Dir)\notes.txt" 'x' }; Expect = 'file=Content/Docs/notes.txt,title=Docs::Only .md pages' }
-		@{ Name = 'a page ending in .MD'; Add = { New-TestFile "$($Bundle.Dir)\Upper.MD" "# Upper`n" }; Expect = 'file=Content/Docs/Upper.MD,title=Docs::A page must end in .md, in lowercase' }
-		@{ Name = 'CRLF in a bundle'; Add = { New-TestFile "$($Bundle.Dir)\Crlf.md" "# Title`r`n" }; Expect = 'file=Content/Docs/Crlf.md,title=Docs::CR line endings' }
-		@{ Name = 'a page that is not UTF-8'; Add = { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Ansi.md", [byte[]](0x23, 0x20, 0x41, 0x0A, 0x0A, 0x93, 0x41, 0x94, 0x0A)) }; Expect = 'file=Content/Docs/Ansi.md,title=Docs::The page is not UTF-8' }
-		@{ Name = 'a UTF-16 page in a bundle'; Add = { [IO.File]::WriteAllText("$($Bundle.Dir)\Wide.md", "# Wide`n", (New-Object System.Text.UnicodeEncoding $false, $true)) }; Expect = 'file=Content/Docs/Wide.md,title=Docs::The page is not UTF-8' }
-		@{ Name = 'a missing landing page'; Add = { Rename-Item "$($Bundle.Dir)\Sample.md" 'Landing.md' }; Expect = 'The landing page Content/Docs/Sample.md is missing' }
-		@{ Name = 'a landing page with the wrong case'; Add = { Rename-Item "$($Bundle.Dir)\Sample.md" 'sample.md' }; Expect = 'file=Content/Docs/sample.md,title=Docs::The landing page must be named Sample.md' }
-		@{ Name = 'a page whose URL the site keeps for versions'; Add = { New-TestFile "$($Bundle.Dir)\Releases.md" "# Releases`n" }; Expect = 'file=Content/Docs/Releases.md,title=Docs::Its URL would start with /releases/' }
-		@{ Name = 'a page whose URL the site keeps for previews'; Add = { New-TestFile "$($Bundle.Dir)\Preview.md" "# Preview`n" }; Expect = 'file=Content/Docs/Preview.md,title=Docs::Its URL would start with /preview/' }
-		@{ Name = 'a folder named like a version'; Add = { New-TestFile "$($Bundle.Dir)\V2\Migration.md" "# Migration`n" }; Expect = 'file=Content/Docs/V2/Migration.md,title=Docs::Its URL would start with /v2/' }
-		@{ Name = 'a page name with no letters or digits'; Add = { New-TestFile "$($Bundle.Dir)\__.md" "# Underscores`n" }; Expect = 'file=Content/Docs/__.md,title=Docs::A part of its path has no letters or digits' }
-		@{ Name = 'two pages with one URL'; Add = { New-TestFile "$($Bundle.Dir)\Getting Started.md" "# A`n"; New-TestFile "$($Bundle.Dir)\getting-started.md" "# B`n" }; Expect = 'file=Content/Docs/getting-started.md,title=Docs::It gets the same URL as Content/Docs/Getting Started.md: /unreal/sample-docs/getting-started/.' }
+		@{ Name = 'a file type a bundle cannot hold'; Add = { New-TestFile "$($Bundle.Dir)\notes.txt" 'x' }; Expect = 'file=Docs/notes.txt,title=Docs::Only .md pages' }
+		@{ Name = 'a page ending in .MD'; Add = { New-TestFile "$($Bundle.Dir)\Upper.MD" "# Upper`n" }; Expect = 'file=Docs/Upper.MD,title=Docs::A page must end in .md, in lowercase' }
+		@{ Name = 'CRLF in a bundle'; Add = { New-TestFile "$($Bundle.Dir)\Crlf.md" "# Title`r`n" }; Expect = 'file=Docs/Crlf.md,title=Docs::CR line endings' }
+		@{ Name = 'a page that is not UTF-8'; Add = { [IO.File]::WriteAllBytes("$($Bundle.Dir)\Ansi.md", [byte[]](0x23, 0x20, 0x41, 0x0A, 0x0A, 0x93, 0x41, 0x94, 0x0A)) }; Expect = 'file=Docs/Ansi.md,title=Docs::The page is not UTF-8' }
+		@{ Name = 'a UTF-16 page in a bundle'; Add = { [IO.File]::WriteAllText("$($Bundle.Dir)\Wide.md", "# Wide`n", (New-Object System.Text.UnicodeEncoding $false, $true)) }; Expect = 'file=Docs/Wide.md,title=Docs::The page is not UTF-8' }
+		@{ Name = 'a missing landing page'; Add = { Rename-Item "$($Bundle.Dir)\Sample.md" 'Landing.md' }; Expect = 'The landing page Docs/Sample.md is missing' }
+		@{ Name = 'a landing page with the wrong case'; Add = { Rename-Item "$($Bundle.Dir)\Sample.md" 'sample.md' }; Expect = 'file=Docs/sample.md,title=Docs::The landing page must be named Sample.md' }
+		@{ Name = 'a page whose URL the site keeps for versions'; Add = { New-TestFile "$($Bundle.Dir)\Releases.md" "# Releases`n" }; Expect = 'file=Docs/Releases.md,title=Docs::Its URL would start with /releases/' }
+		@{ Name = 'a page whose URL the site keeps for previews'; Add = { New-TestFile "$($Bundle.Dir)\Preview.md" "# Preview`n" }; Expect = 'file=Docs/Preview.md,title=Docs::Its URL would start with /preview/' }
+		@{ Name = 'a folder named like a version'; Add = { New-TestFile "$($Bundle.Dir)\V2\Migration.md" "# Migration`n" }; Expect = 'file=Docs/V2/Migration.md,title=Docs::Its URL would start with /v2/' }
+		@{ Name = 'a page name with no letters or digits'; Add = { New-TestFile "$($Bundle.Dir)\__.md" "# Underscores`n" }; Expect = 'file=Docs/__.md,title=Docs::A part of its path has no letters or digits' }
+		@{ Name = 'two pages with one URL'; Add = { New-TestFile "$($Bundle.Dir)\Getting Started.md" "# A`n"; New-TestFile "$($Bundle.Dir)\getting-started.md" "# B`n" }; Expect = 'file=Docs/getting-started.md,title=Docs::It gets the same URL as Docs/Getting Started.md: /unreal/sample-docs/getting-started/.' }
 	)
 	foreach ($Rule in $FileRules)
 	{
@@ -1091,6 +1093,12 @@ try
 	$env:GIT_COMMITTER_DATE = '2026-01-02T03:04:05Z'
 	try { $null = Invoke-NativeQuiet git @('-C', $Plugin, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'docs') }
 	finally { Remove-Item Env:\GIT_COMMITTER_DATE }
+	# A later commit that leaves the docs alone.
+	New-TestFile "$Plugin\Source\SampleEditor\Private\Later.cpp" "// Copyright 2026 Example Studio. All Rights Reserved.`n"
+	$null = Invoke-NativeQuiet git @('-C', $Plugin, 'add', '-A')
+	$env:GIT_COMMITTER_DATE = '2026-03-04T05:06:07Z'
+	try { $null = Invoke-NativeQuiet git @('-C', $Plugin, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'code') }
+	finally { Remove-Item Env:\GIT_COMMITTER_DATE }
 	$PluginHead = (Invoke-NativeQuiet git @('-C', $Plugin, 'rev-parse', 'HEAD')).Output | Select-Object -First 1
 	$DocsScript = Join-Path $Root 'plugin/docs/New-DocsBundle.ps1'
 	$ScriptOut = Join-Paths $Temp 'docs-script'
@@ -1105,13 +1113,13 @@ try
 	finally { Pop-Location }
 	Check 'relative paths are taken from the current location' (Test-Path -LiteralPath "$Temp\docs-relative\unreal\sample-docs\preview\docs.json")
 
-	New-TestFile "$Plugin\Content\Docs\Bad.md" "# Title`n`nSee [it](Missing.md).`n"
+	New-TestFile "$Plugin\Docs\Bad.md" "# Title`n`nSee [it](Missing.md).`n"
 	$Annotations = Get-Annotations { & $DocsScript -PluginDir $Plugin -OutDir $ScriptOut -Repository 'Example/SampleDocs' -Private:$false }
-	Check 'without -Strict a problem is a warning' (@($Annotations | Where-Object { $_ -like '::warning file=Content/Docs/Bad.md,line=3,*' }).Count -eq 1)
+	Check 'without -Strict a problem is a warning' (@($Annotations | Where-Object { $_ -like '::warning file=Docs/Bad.md,line=3,*' }).Count -eq 1)
 	$script:Caught = $null
 	$null = Get-Annotations { try { & $DocsScript -PluginDir $Plugin -OutDir $ScriptOut -Repository 'Example/SampleDocs' -Private:$false -Strict } catch { $script:Caught = $_.Exception.Message } }
 	Check 'with -Strict it fails the script' ($script:Caught -like '*1 problem(s)*') "$script:Caught"
-	Remove-Item "$Plugin\Content\Docs\Bad.md"
+	Remove-Item "$Plugin\Docs\Bad.md"
 
 	# The action as the release job runs it. gh knows a release for v1.4.0, and none yet for v1.5.0.
 	$Stub = Join-Paths $Temp 'gh-stub'
@@ -1145,24 +1153,62 @@ try
 	Check 'a re-run keeps the date of the release it completes' ($Step.ExitCode -eq 0 -and $StepJson.released -eq '2026-10-01') ($Step.Output -join "`n")
 
 	New-FixturePlugin $NoDescription
-	Remove-Item "$NoDescription\Content\Docs" -Recurse
+	Remove-Item "$NoDescription\Docs" -Recurse
 	$Output = (& $DocsScript -PluginDir $NoDescription -OutDir $ScriptOut -Repository 'Example/Plain' -Private:$false 6>&1 | Out-String)
 	Check 'a plugin without docs has nothing to check' ($Output.Contains('nothing to check'))
 	$script:Caught = $null
 	$null = Get-Annotations { try { & $DocsScript -PluginDir $NoDescription -OutDir $ScriptOut -Repository 'Example/Plain' -Private:$false -Strict } catch { $script:Caught = $_.Exception.Message } }
-	Check 'publishing a plugin without docs fails' ($script:Caught -like '*no Content/Docs*') "$script:Caught"
+	Check 'publishing a plugin without docs fails' ($script:Caught -like '*has no Docs folder to publish*') "$script:Caught"
 
-	# Windows finds Content/docs as Content/Docs; GitHub and git log do not.
+	Write-Host 'Docs folder'
+	# Windows finds docs or DOCS as Docs; GitHub and git log do not.
 	$Lower = Join-Paths $Temp 'docs-lower'
-	New-DocsFixture $Lower
-	[IO.Directory]::Move("$Lower\Content\Docs", "$Lower\Content\Docs-renamed")
-	[IO.Directory]::Move("$Lower\Content\Docs-renamed", "$Lower\Content\docs")
 	$LowerOut = Join-Paths $Temp 'docs-lower-out'
+	foreach ($Spelling in @('docs', 'DOCS'))
+	{
+		New-DocsFixture $Lower
+		[IO.Directory]::Move("$Lower\Docs", "$Lower\Docs-renamed")
+		[IO.Directory]::Move("$Lower\Docs-renamed", "$Lower\$Spelling")
+		$script:Caught = $null
+		$null = Get-Annotations { try { & $DocsScript -PluginDir $Lower -OutDir $LowerOut -Repository 'Example/Lower' -Private:$false -Strict } catch { $script:Caught = $_.Exception.Message } }
+		Check "publishing docs in $Spelling fails, saying to rename it" ($script:Caught -clike "The docs folder is $Spelling. Rename it to Docs:*") "$script:Caught"
+		$Annotations = Get-Annotations { try { & $DocsScript -PluginDir $Lower -OutDir $LowerOut -Repository 'Example/Lower' -Private:$false } catch { Write-Host $_.Exception.Message } }
+		Check "without publish-docs $Spelling is a warning, and nothing is built" (@($Annotations | Where-Object { $_ -clike "::warning title=Docs::The docs folder is $Spelling.*" }).Count -eq 1 -and -not (Test-Path -LiteralPath $LowerOut)) ($Annotations -join "`n")
+	}
+
+	# Docs left where they used to be, in Content/Docs or Content/docs. Nothing is built from them.
+	$Old = Join-Paths $Temp 'docs-old'
+	$OldOut = Join-Paths $Temp 'docs-old-out'
+	foreach ($Spelling in @('Docs', 'docs'))
+	{
+		New-DocsFixture $Old
+		[IO.Directory]::Move("$Old\Docs", "$Old\Content\$Spelling")
+		$Move = "The docs are in Content/$Spelling, which is no longer read. Move Content/$Spelling to Docs/ beside the .uplugin, and add /Docs/... to Config/FilterPlugin.ini."
+		$script:Caught = $null
+		$Annotations = Get-Annotations { try { & $DocsScript -PluginDir $Old -OutDir $OldOut -Repository 'Example/Old' -Private:$false -Strict } catch { $script:Caught = $_.Exception.Message } }
+		Check "publishing docs in Content/$Spelling fails, saying to move them" ($script:Caught -ceq $Move -and @($Annotations | Where-Object { $_ -ceq "::error title=Docs::$Move" }).Count -eq 1) "$script:Caught"
+		$Annotations = Get-Annotations { try { & $DocsScript -PluginDir $Old -OutDir $OldOut -Repository 'Example/Old' -Private:$false } catch { Write-Host $_.Exception.Message } }
+		Check "without publish-docs Content/$Spelling is a warning, and nothing is built" (@($Annotations | Where-Object { $_ -ceq "::warning title=Docs::$Move The docs are not checked until then." }).Count -eq 1 -and -not (Test-Path -LiteralPath $OldOut)) ($Annotations -join "`n")
+	}
 	$script:Caught = $null
-	$null = Get-Annotations { try { & $DocsScript -PluginDir $Lower -OutDir $LowerOut -Repository 'Example/Lower' -Private:$false -Strict } catch { $script:Caught = $_.Exception.Message } }
-	Check 'publishing docs in Content/docs fails, saying to rename it' ($script:Caught -like 'The docs folder is Content/docs. Rename it to Content/Docs*') "$script:Caught"
-	$Annotations = Get-Annotations { try { & $DocsScript -PluginDir $Lower -OutDir $LowerOut -Repository 'Example/Lower' -Private:$false } catch { Write-Host $_.Exception.Message } }
-	Check 'without publish-docs it is a warning, and nothing is built' (@($Annotations | Where-Object { $_ -like '::warning title=Docs::The docs folder is Content/docs*' }).Count -eq 1 -and -not (Test-Path -LiteralPath $LowerOut)) ($Annotations -join "`n")
+	try { $null = New-DocsBundle -PluginDir $Old -OutDir $OldOut -Ref 'main' -Commit $Commit -Repo 'Example/Old' -Released '2026-11-09' } catch { $script:Caught = $_.Exception.Message }
+	Check 'New-DocsBundle builds nothing from Content/Docs' ($script:Caught -clike 'The docs are in Content/docs, which is no longer read.*' -and -not (Test-Path -LiteralPath $OldOut)) "$script:Caught"
+
+	# Docs moved, with Content/Docs left behind: the docs come from Docs, with a warning.
+	$Both = Join-Paths $Temp 'docs-both'
+	New-DocsFixture $Both
+	New-TestFile "$Both\Content\Docs\Old.md" "# Old`n"
+	$Leftover = '::warning title=Docs::Content/Docs is no longer read; the docs come from Docs/. Move anything still needed to Docs/ and delete Content/Docs.'
+	$script:Other = $null
+	$Annotations = @(Get-Annotations { $script:Other = New-DocsBundle -PluginDir $Both -OutDir "$Temp\docs-both-out" -Ref 'main' -Commit $Commit -Repo 'Example/Both' -Released '2026-11-09' })
+	Check 'with Content/Docs beside Docs, the docs come from Docs' ((Same $script:Other.Files @('Guides/Setup.md', 'Images/Logo.svg', 'Images/Shot.png', 'Sample.md', 'docs.json')) -and $script:Other.Manifest.base -ceq 'Docs') ($script:Other.Files -join ', ')
+	Check 'and Content/Docs gets a warning' (@($Annotations | Where-Object { $_ -ceq $Leftover }).Count -eq 1) ($Annotations -join "`n")
+	$null = Invoke-NativeQuiet git @('-C', $Both, 'init', '-q')
+	$null = Invoke-NativeQuiet git @('-C', $Both, 'add', '-A')
+	$null = Invoke-NativeQuiet git @('-C', $Both, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'docs')
+	$script:Caught = $null
+	$Annotations = Get-Annotations { try { & $DocsScript -PluginDir $Both -OutDir "$Temp\docs-both-script" -Repository 'Example/Both' -Private:$false -Strict } catch { $script:Caught = $_.Exception.Message } }
+	Check 'publishing still passes then, with only that warning' ($null -eq $script:Caught -and @($Annotations | Where-Object { $_ -like '::error*' }).Count -eq 0 -and @($Annotations | Where-Object { $_ -ceq $Leftover }).Count -eq 1) "$script:Caught $($Annotations -join "`n")"
 
 	Write-Host 'Docs publishing'
 	$DocsRemote = Join-Paths $Temp 'docs-content.git'
@@ -1266,7 +1312,7 @@ try
 	$null = Invoke-NativeQuiet git @('-C', $ContentB, 'add', '-A')
 	$null = Invoke-NativeQuiet git (@('-C', $ContentB) + $Identity + @('commit', '-q', '-m', 'Other 2.0.0 docs'))
 	$null = Invoke-NativeQuiet git @('-C', $ContentB, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
-	Remove-Item "$Plugin\Content\Docs\Images\Logo.svg"
+	Remove-Item "$Plugin\Docs\Images\Logo.svg"
 	$null = Get-Annotations { $script:Bundle = New-DocsBundle @BundleArguments }
 	$Bundle = $script:Bundle
 	$Output = (& { $script:Published = Publish-DocsBundle -BundleDir $Bundle.Dir -ContentDir $ContentA } 6>&1 | Out-String)

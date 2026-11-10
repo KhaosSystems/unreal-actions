@@ -3,9 +3,10 @@
 Build a plugin's docs bundle for docs.khaos.systems and check it.
 
 .DESCRIPTION
-The bundle is Content/Docs plus a docs.json manifest, written to <OutDir>/<section>/<slug>/<version>/
-as the README of KhaosSystems/docs-content describes. Each problem is reported on the plugin's own
-file and line: as an error that fails the script with -Strict, otherwise as a warning.
+The bundle is the Docs folder beside the .uplugin plus a docs.json manifest, written to
+<OutDir>/<section>/<slug>/<version>/ as the README of KhaosSystems/docs-content describes. Each
+problem is reported on the plugin's own file and line: as an error that fails the script with
+-Strict, otherwise as a warning. Docs left in Content/Docs, where they used to be, are not read.
 
 With -Tag the bundle is that release's, and it is also zipped as <Repo>-<version>-docs.zip, with a
 .sha256, to attach to the release. Without, it is a preview, in a folder named preview: what CI
@@ -38,21 +39,15 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '../../lib/UnrealActions.psm1') -Force
 
-$Descriptor = Get-PluginDescriptor $PluginDir
-if (-not (Test-Path -LiteralPath (Join-Paths $Descriptor.Dir 'Content' 'Docs') -PathType Container))
+function Set-NoBundle
 {
-	if ($Strict)
-	{
-		$Message = "$($Descriptor.Name) has no Content/Docs to publish. Add the docs, or turn publish-docs off."
-		Write-CiAnnotation error $Message -Title 'Docs'
-		throw $Message
-	}
-	Write-Host "$($Descriptor.Name) has no Content/Docs; nothing to check."
 	Set-CiOutput 'bundle-dir' ''
 	Set-CiOutput 'folder' ''
 	Set-CiOutput 'zip' ''
-	return
 }
+
+$Descriptor = Get-PluginDescriptor $PluginDir
+# Docs in the wrong case, or left in Content/Docs. Nothing is built from either.
 $Problem = Get-DocsFolderProblem $Descriptor.Dir
 if ($Problem)
 {
@@ -62,9 +57,19 @@ if ($Problem)
 		throw $Problem
 	}
 	Write-CiAnnotation warning "$Problem The docs are not checked until then." -Title 'Docs'
-	Set-CiOutput 'bundle-dir' ''
-	Set-CiOutput 'folder' ''
-	Set-CiOutput 'zip' ''
+	Set-NoBundle
+	return
+}
+if (-not (Test-Path -LiteralPath (Join-Paths $Descriptor.Dir 'Docs') -PathType Container))
+{
+	if ($Strict)
+	{
+		$Message = "$($Descriptor.Name) has no Docs folder to publish. Add one beside the .uplugin, or turn publish-docs off."
+		Write-CiAnnotation error $Message -Title 'Docs'
+		throw $Message
+	}
+	Write-Host "$($Descriptor.Name) has no Docs folder; nothing to check."
+	Set-NoBundle
 	return
 }
 
@@ -109,7 +114,7 @@ else
 	if (-not $Ref) { $Ref = Get-GitLine @('branch', '--show-current') }
 	if (-not $Ref) { $Ref = $env:GITHUB_REF_NAME }
 	if (-not $Ref) { $Ref = 'HEAD' }
-	$Stamp = Get-GitLine @('log', '-1', '--format=%ct', '--', 'Content/Docs')
+	$Stamp = Get-GitLine @('log', '-1', '--format=%ct', '--', 'Docs')
 	if ($Stamp) { $Released = [DateTimeOffset]::FromUnixTimeSeconds([long]$Stamp).UtcDateTime.ToString('yyyy-MM-dd', $Invariant) }
 }
 

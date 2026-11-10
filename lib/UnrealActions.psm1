@@ -1640,7 +1640,10 @@ function Get-ReleaseNotes
 # <section>/<slug>/<version>/, which the site is built from. That repository's README is the
 # contract these functions follow. The site checks the same Markdown rules again when it builds.
 
-$script:DocsBase = 'Content/Docs'
+# A plugin's docs live in Docs, beside its .uplugin: Khaos Docs shows that folder in the editor's
+# documentation window. They used to live in Content/Docs, which is no longer read.
+$script:DocsBase = 'Docs'
+$script:OldDocsBase = 'Content/Docs'
 $script:DocsSections = @('unreal')
 # Pages end in .md, in that case: the site's build matches it exactly. Image types are matched in
 # any case, as the site does.
@@ -1865,10 +1868,10 @@ function Get-DocsPagePath([string]$File, [string]$Landing)
 
 <#
 .SYNOPSIS
-Build a plugin's docs bundle: Content/Docs plus docs.json, in <OutDir>/<section>/<slug>/<version>/.
+Build a plugin's docs bundle: Docs plus docs.json, in <OutDir>/<section>/<slug>/<version>/.
 
 .DESCRIPTION
-Pages (.md, in that case) and images keep their paths below Content/Docs. Pages and SVGs get LF line
+Pages (.md, in that case) and images keep their paths below Docs. Pages and SVGs get LF line
 endings; a page loses any UTF-8 byte order mark, and one saved as UTF-16 becomes UTF-8. An SVG saved
 as UTF-16, and anything else, is left out with a warning. The version folder is emptied first, so a
 page deleted since the last build disappears, and nothing beside it is touched. docs.json has sorted
@@ -1876,7 +1879,8 @@ keys and no timestamps, so the same input gives the same bytes. An empty Version
 in a folder named preview.
 
 name, description, supportUrl and fabUrl come from the .uplugin, the slug from the repository name.
-A URL that is not http(s) is left out with a warning, as the site takes no other.
+A URL that is not http(s) is left out with a warning, as the site takes no other. So is a
+Content/Docs folder beside Docs.
 
 .OUTPUTS
 Dir (the version folder), Folder (section/slug/version), Manifest and Files, the bundle's files as
@@ -1906,10 +1910,12 @@ function New-DocsBundle
 	if ($Released -cnotmatch $script:DocsDatePattern) { throw "Released must be YYYY-MM-DD, not '$Released'." }
 
 	$Descriptor = Get-PluginDescriptor $PluginDir
-	$Source = Join-Paths $Descriptor.Dir 'Content' 'Docs'
-	if (-not (Test-Path -LiteralPath $Source -PathType Container)) { throw "$($Descriptor.Name) has no Content/Docs folder." }
 	$Problem = Get-DocsFolderProblem $Descriptor.Dir
 	if ($Problem) { throw $Problem }
+	$Source = Join-Paths $Descriptor.Dir $script:DocsBase
+	if (-not (Test-Path -LiteralPath $Source -PathType Container)) { throw "$($Descriptor.Name) has no $($script:DocsBase) folder beside its .uplugin." }
+	$Old = Find-DocsFolder $Descriptor.Dir $script:OldDocsBase
+	if ($Old) { Write-CiAnnotation warning "$Old is no longer read; the docs come from $($script:DocsBase)/. Move anything still needed to $($script:DocsBase)/ and delete $Old." -Title 'Docs' }
 
 	$VersionName = $null
 	$Folder = 'preview'
@@ -2112,12 +2118,33 @@ function Find-DocsFile([string]$Root, [string]$Path)
 	return ($Found -join '/')
 }
 
-<# Content/Docs spelled in another case on disk, such as Content/docs, or nothing. Windows finds it; GitHub and git log do not. #>
+<# A '/'-separated folder below a plugin, spelled as it is on disk, or nothing if there is no such folder. #>
+function Find-DocsFolder([string]$PluginDir, [string]$Path)
+{
+	$Found = Find-DocsFile $PluginDir $Path
+	if ($Found -and [IO.Directory]::Exists((Join-Paths $PluginDir $Found))) { return $Found }
+	return $null
+}
+
+<#
+.SYNOPSIS
+What stops a plugin's docs being read, or nothing.
+
+.DESCRIPTION
+Docs spelled in another case on disk, such as docs: Windows finds it, GitHub and git log do not. Or
+no Docs, but docs left in Content/Docs, which is no longer read.
+#>
 function Get-DocsFolderProblem([string]$PluginDir)
 {
-	$Found = Find-DocsFile $PluginDir $script:DocsBase
-	if (-not $Found -or (Test-SameName $Found $script:DocsBase)) { return $null }
-	return "The docs folder is $Found. Rename it to $($script:DocsBase): Windows does not mind the case, but GitHub and the docs site do."
+	$Found = Find-DocsFolder $PluginDir $script:DocsBase
+	if ($Found)
+	{
+		if (Test-SameName $Found $script:DocsBase) { return $null }
+		return "The docs folder is $Found. Rename it to $($script:DocsBase): Windows does not mind the case, but GitHub and the docs site do."
+	}
+	$Old = Find-DocsFolder $PluginDir $script:OldDocsBase
+	if ($Old) { return "The docs are in $Old, which is no longer read. Move $Old to $($script:DocsBase)/ beside the .uplugin, and add /$($script:DocsBase)/... to Config/FilterPlugin.ini." }
+	return $null
 }
 
 # Windows ignores case in file names; GitHub, the Linux build of the site and its URLs do not.
@@ -3005,7 +3032,7 @@ cannot read, docs.json values of the wrong type, URLs in docs.json that are not 
 names that give no URL, a URL kept for versions, or the URL of another page. Any of these would stop
 the site deploying every product.
 
-Each problem is an annotation on the plugin's own file (Content/Docs/...) and, for Markdown, its
+Each problem is an annotation on the plugin's own file (Docs/...) and, for Markdown, its
 line. With -AsWarnings they are reported as warnings, for runs that do not publish.
 
 .OUTPUTS
