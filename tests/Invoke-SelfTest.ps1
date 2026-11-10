@@ -358,6 +358,12 @@ try
 	$Outcome = Test-Fixture $Plugin
 	Check 'docs listed in part are one error, naming the first file left out' ($Outcome.Errors.Count -eq 1 -and $Outcome.Errors[0].StartsWith('::error file=Docs/Images/Logo.svg,title=Fab requirement::Fab buyers would not get Docs/Images/Logo.svg and 1 other file(s) in Docs/:')) ($Outcome.Annotations -join "`n")
 
+	# Git keeps no empty folder, so a plugin with no content has no Content/; packaging adds it.
+	New-FixturePlugin $Plugin
+	Remove-Item "$Plugin\Content" -Recurse -Force
+	$Outcome = Test-Fixture $Plugin
+	Check 'a plugin with no Content/ passes' ($Outcome.Errors.Count -eq 0) ($Outcome.Annotations -join "`n")
+
 	New-FixturePlugin $Plugin
 	Remove-Item "$Plugin\Resources\Icon128.png"
 	$Outcome = Test-Fixture $Plugin
@@ -416,6 +422,23 @@ try
 		try { $Entries = @($Archive.Entries | ForEach-Object { $_.FullName }) } finally { $Archive.Dispose() }
 	}
 	Check 'the source zip has Docs when FilterPlugin.ini lists it' ($Entries -contains 'Sample/Docs/Readme.md' -and $Entries -contains 'Sample/Config/FilterPlugin.ini') ($Entries -join ', ')
+	Check 'a plugin with content gets no extra Content/ entry' ($Entries -contains 'Sample/Content/Sample.uasset' -and $Entries -notcontains 'Sample/Content/') ($Entries -join ', ')
+
+	$Empty = Join-Paths $Temp 'NoContent'
+	New-FixturePlugin $Empty
+	Remove-Item "$Empty\Content" -Recurse -Force
+	$EmptyDist = Join-Paths $Temp 'dist-empty'
+	$EmptyZip = "$EmptyDist\Sample-1.2.3-UE5.8.zip"
+	$Output = @(& $PackageScript -PluginDir $Empty -OutDir $EmptyDist -EngineVersions '5.8' -Version 'v1.2.3' 6>&1 | ForEach-Object { "$_" })
+	$EmptyEntries = @()
+	if (Test-Path -LiteralPath $EmptyZip)
+	{
+		$Archive = [System.IO.Compression.ZipFile]::OpenRead($EmptyZip)
+		try { $EmptyEntries = @($Archive.Entries | ForEach-Object { $_.FullName }) } finally { $Archive.Dispose() }
+		Expand-PluginZip -ZipPath $EmptyZip -Destination "$Temp\x-empty"
+	}
+	$Expected = @($Entries | ForEach-Object { $_.Replace('Sample/Content/Sample.uasset', 'Sample/Content/') })
+	Check 'a plugin with no content gets an empty Content/ folder in its zip, as Fab requires' ((Same $EmptyEntries $Expected) -and (Test-Path -LiteralPath "$Temp\x-empty\Sample\Content" -PathType Container) -and @($Output | Where-Object { $_ -like '*empty Content/ folder*' }).Count -eq 1) "$($EmptyEntries -join ', ') | $($Output -join ' ')"
 
 	New-TestFile "$Plugin\Config\FilterPlugin.ini" "[FilterPlugin]`n/Extras/...`n-/Extras/Private/...`n"
 	$Unlisted = Get-PluginPackageFiles (Get-PluginDescriptor $Plugin)

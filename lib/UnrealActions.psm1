@@ -799,7 +799,9 @@ function New-PluginZip
 		[Parameter(Mandatory)][string]$SourceDir,
 		[Parameter(Mandatory)][string[]]$Files,
 		[Parameter(Mandatory)][string]$RootFolder,
-		[Parameter(Mandatory)][string]$ZipPath
+		[Parameter(Mandatory)][string]$ZipPath,
+		# Empty folders to add, such as Content. A zip keeps a folder only as an entry of its own.
+		[string[]]$Folders = @()
 	)
 
 	Add-Type -AssemblyName System.IO.Compression
@@ -814,10 +816,13 @@ function New-PluginZip
 		$Zip = New-Object System.IO.Compression.ZipArchive $Stream, ([System.IO.Compression.ZipArchiveMode]::Create)
 		try
 		{
-			foreach ($Relative in $Files)
+			$Entries = [string[]](@($Files) + @($Folders | ForEach-Object { "$_/" }))
+			[Array]::Sort($Entries, [StringComparer]::Ordinal)
+			foreach ($Relative in $Entries)
 			{
 				$Entry = $Zip.CreateEntry("$RootFolder/$Relative", [System.IO.Compression.CompressionLevel]::Optimal)
 				$Entry.LastWriteTime = $Timestamp
+				if ($Relative.EndsWith('/')) { continue }
 				$Source = [IO.File]::OpenRead((Join-Paths $SourceDir $Relative))
 				try
 				{
@@ -1182,7 +1187,9 @@ function Test-PluginPackage
 
 	# Layout ----------------------------------------------------------------------------------
 
-	foreach ($Folder in @('Source', 'Content', 'Config'))
+	# Fab requires Content/ as well. Git keeps no empty folder, so a plugin with no content has none;
+	# New-SourcePackage then writes an empty Content/ into the zip.
+	foreach ($Folder in @('Source', 'Config'))
 	{
 		if (-not ($Files | Where-Object { $_.StartsWith("$Folder/") } | Select-Object -First 1))
 		{

@@ -85,7 +85,8 @@ A plugin's docs live in `Docs/`, beside the `.uplugin`. `Config/FilterPlugin.ini
 
 Khaos Docs shows `Docs/` in its documentation window, so buyers need it too. BuildPlugin, which
 builds what Fab buyers download, ships it only when `FilterPlugin.ini` lists it, so packaging fails
-without that line. Docs left in `Content/Docs` are no longer read; CI says to move them.
+without that line. Docs left in `Content/Docs` are no longer read; CI says to move them. A plugin
+left with no `Content/` still packages: Fab requires the folder, so the zip gets an empty one.
 
 With `publish-docs`, each release also publishes `Docs/` to
 [docs.khaos.systems](https://docs.khaos.systems):
