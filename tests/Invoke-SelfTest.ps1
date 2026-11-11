@@ -1003,10 +1003,12 @@ try
 		@{ Name = 'a full link to the site with one slash'; Text = "# Title`n`nSee [it](https:/docs.khaos.systems/unreal/sample-docs/guides/setup/).`n"; Line = 3; Expect = 'goes to the docs site in an unusual form' }
 		@{ Name = 'a full link to the site with an empty part'; Text = "# Title`n`nSee [it](https://docs.khaos.systems/unreal//sample-docs/guides/setup/).`n"; Line = 3; Expect = 'goes to the docs site in an unusual form' }
 		@{ Name = 'a full link to the site with an escaped dot in its host'; Text = "# Title`n`nSee [it](https://docs%2Ekhaos.systems/unreal/sample-docs/guides/setup/).`n"; Line = 3; Expect = 'goes to the docs site in an unusual form' }
-		@{ Name = 'a full link to the site outside every product'; Text = "# Title`n`nSee [it](https://docs.khaos.systems/guides/setup/).`n"; Line = 3; Expect = 'the docs site has no page there' }
+		# The site only warns on it; no product can put a page there.
+		@{ Name = 'a full link to the site outside every product'; Text = "# Title`n`nSee [it](https://docs.khaos.systems/guides/setup/).`n"; Line = 3; Expect = 'Link https://docs.khaos.systems/guides/setup/ is broken: the docs site has no page there. Link its home page, a section page or a product''s page.' }
 		@{ Name = 'an image path that starts with a space'; Text = "# Title`n`n![Shot](< Images/Shot.png>)`n"; Line = 3; Expect = 'starts or ends with a space' }
-		@{ Name = 'a table that aligns its columns'; Text = "# Title`n`n| Name | Default |`n| :--- | ---: |`n| a | b |`n"; Line = 4; Expect = 'aligns its columns with :' }
-		@{ Name = 'a table of one column, aligned with a colon'; Text = "# Title`n`nName`n:---`n"; Line = 4; Expect = 'aligns its columns with :' }
+		# The site builds them now, but one deployed before its fix fails on them.
+		@{ Name = 'a table that aligns its columns'; Text = "# Title`n`n| Name | Default |`n| :--- | ---: |`n| a | b |`n"; Line = 4; Expect = 'The table aligns its columns with :. Tables in docs take no column alignment yet. Use plain --- in this row.' }
+		@{ Name = 'a table of one column, aligned with a colon'; Text = "# Title`n`nName`n:---`n"; Line = 4; Expect = 'The table aligns its columns with :. Tables in docs take no column alignment yet.' }
 		@{ Name = 'an H1 of a byte order mark, which JavaScript trims'; Text = "# $([char]0xFEFF)`n`nText.`n"; Line = 1; Expect = 'The H1 is empty' }
 		@{ Name = 'a definition of a full link to a page these docs do not have'; Text = "# Title`n`nSee [it].`n`n[it]: https://docs.khaos.systems/unreal/sample-docs/nope`n"; Line = 5; Expect = 'these docs have no page there' }
 		@{ Name = 'a link whose target holds a no-break space'; Text = "# Title`n`nSee [it](Miss$([char]0xA0)ing.md).`n"; Line = 3; Expect = 'is broken' }

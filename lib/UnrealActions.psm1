@@ -2380,15 +2380,17 @@ function Get-DocsSiteUrl([string]$Url)
 
 <#
 .SYNOPSIS
-What is wrong with an http(s) link, or nothing: a link to the docs site that its build fails on.
+What is wrong with an http(s) link, or nothing: a link to the docs site that its build fails on, or
+that leads outside every product.
 
 .DESCRIPTION
 The site's build fails on a broken link into the linking page's own copy of the docs: the latest
-version at /<section>/<slug>/, or this version at /<section>/<slug>/v<version>/. It also fails on a
-link outside every product, unless that is its home page, a section's page or one of its files. A
-broken link into another product or version only warns there, so it passes here. Each page is built
-as <path>/, <path>/index.html and <path>/index.md. A link to the site written any other way than
-https://docs.khaos.systems/<path> is an error, as this check might read it otherwise than the site.
+version at /<section>/<slug>/, or this version at /<section>/<slug>/v<version>/. A broken link into
+another product or version only warns there, so it passes here. A link outside every product only
+warns there too, but is an error here unless it is the site's home page, a section's page or one of
+its files, as no product can put a page there. Each page is built as <path>/, <path>/index.html and
+<path>/index.md. A link to the site written any other way than https://docs.khaos.systems/<path> is
+an error, as this check might read it otherwise than the site.
 
 .PARAMETER Fix
 What to do about a page these docs do not have.
@@ -2407,7 +2409,7 @@ function Get-DocsSiteLinkProblem([string]$Url, [string]$BundleDir, $Manifest, [s
 	if (-not (Test-NameIn $Parts[0] $script:DocsSections))
 	{
 		if ($Parts.Count -eq 1 -and (Test-NameIn $Parts[0] $script:DocsSiteFiles)) { return $null }
-		return "Link $Url is broken: the docs site has no page there, and fails its build on it."
+		return "Link $Url is broken: the docs site has no page there. Link its home page, a section page or a product's page."
 	}
 	$Product = "/$($Manifest.section)/$($Manifest.slug)"
 	if (-not ($Path -ceq $Product -or $Path.StartsWith("$Product/", [StringComparison]::Ordinal))) { return $null }
@@ -3249,8 +3251,9 @@ function Test-DocsMarkdown
 					& $CloseLeaf
 					$Leaf.Kind = 'table'
 					& $AddRow $Header.Line $Header.Text
-					# The site's parser aligns a column with a style attribute, which its CSP blocks.
-					if ($Body.IndexOf(':') -ge 0) { & $Problem $Number 'The table aligns its columns with :, which the docs site cannot show yet: its build rejects the style that gives them. Use plain --- in this row.' }
+					# The docs site builds column alignment as a class once its fix is deployed. Before
+					# that its build fails on it, so docs take none yet.
+					if ($Body.IndexOf(':') -ge 0) { & $Problem $Number 'The table aligns its columns with :. Tables in docs take no column alignment yet. Use plain --- in this row.' }
 					continue
 				}
 			}
