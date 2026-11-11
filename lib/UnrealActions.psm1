@@ -667,6 +667,17 @@ function Test-FilterRules($Rules, [string]$Relative)
 $script:ExcludedFolders = @('Binaries', 'Intermediate', 'Saved', 'DerivedDataCache', '.vs', '.vscode', '.idea', '.git', '.github', '__pycache__')
 $script:ExcludedFiles = @('.gitignore', '.gitattributes', '.gitmodules', '.gitkeep', '.DS_Store', 'Thumbs.db', 'desktop.ini')
 
+<# The first folder in a '/'-separated path that is never shipped, such as Docs/Saved, or nothing. #>
+function Get-ExcludedFolder([string]$Relative)
+{
+	$Parts = $Relative.Split('/')
+	for ($K = 0; $K -lt $Parts.Count - 1; ++$K)
+	{
+		if ($script:ExcludedFolders -contains $Parts[$K]) { return ($Parts[0..$K] -join '/') }
+	}
+	return $null
+}
+
 <#
 .SYNOPSIS
 Turn an Unreal FileFilter pattern into a regex over '/'-separated relative paths.
@@ -739,7 +750,8 @@ function Get-FilterPluginRules
 		if (-not $Trimmed -or $Trimmed.StartsWith(';')) { continue }
 		if ($Trimmed.StartsWith('['))
 		{
-			$InSection = ($Trimmed -eq '[FilterPlugin]')
+			# Case-sensitive, as FileFilter.ReadRulesFromFile matches it: BuildPlugin skips [filterplugin].
+			$InSection = ($Trimmed -ceq '[FilterPlugin]')
 			continue
 		}
 		if ($InSection) { $Rules += $Trimmed }
@@ -1208,11 +1220,17 @@ function Test-PluginPackage
 	}
 
 	$Shipped = New-FilterRules ($script:BuildPluginRules + (Get-FilterPluginRules $Descriptor.Dir))
+	# BuildPlugin reads the section only by its exact name.
+	$Ini = Join-Paths $Descriptor.Dir 'Config' 'FilterPlugin.ini'
+	$Header = $null
+	if (Test-Path -LiteralPath $Ini) { $Header = @([IO.File]::ReadAllLines($Ini) | ForEach-Object { $_.Trim() } | Where-Object { $_ -eq '[FilterPlugin]' -and $_ -cne '[FilterPlugin]' })[0] }
+	$Rename = ''
+	if ($Header) { $Rename = " BuildPlugin reads only a section named [FilterPlugin], in that case: rename $Header." }
 	foreach ($File in ($Files | Where-Object { $_.StartsWith('Config/') -and $_ -ne 'Config/FilterPlugin.ini' }))
 	{
 		if (-not (Test-FilterRules $Shipped $File))
 		{
-			& $Fail "Fab buyers would not get $($File): BuildPlugin, which Epic builds the plugin with, copies Config files only when Config/FilterPlugin.ini lists them. Add /$File (or /Config/...) under [FilterPlugin]." $File
+			& $Fail "Fab buyers would not get $($File): BuildPlugin, which Epic builds the plugin with, copies Config files only when Config/FilterPlugin.ini lists them. Add /$File (or /Config/...) under [FilterPlugin].$Rename" $File
 		}
 	}
 
@@ -1220,7 +1238,18 @@ function Test-PluginPackage
 	$Docs = Find-DocsFolder $Descriptor.Dir $script:DocsBase
 	if ($Docs)
 	{
-		$Unshipped = @((Get-RelativeFiles (Join-Paths $Descriptor.Dir $Docs)) | Where-Object { $script:ExcludedFiles -notcontains [IO.Path]::GetFileName($_) } | ForEach-Object { "$Docs/$_" } | Where-Object { -not (Test-FilterRules $Shipped $_) })
+		$DocsFiles = @((Get-RelativeFiles (Join-Paths $Descriptor.Dir $Docs)) | Where-Object { $script:ExcludedFiles -notcontains [IO.Path]::GetFileName($_) } | ForEach-Object { "$Docs/$_" })
+		# Never in the source zip, whatever FilterPlugin.ini says. The docs site publishes no name
+		# that starts with '.', so only the others go missing.
+		$Pruned = @($DocsFiles | Where-Object { (Get-ExcludedFolder $_) -and -not ($_.Split('/') | Where-Object { $_.StartsWith('.') }) })
+		if ($Pruned.Count -gt 0)
+		{
+			$More = ''
+			if ($Pruned.Count -gt 1) { $More = " and $($Pruned.Count - 1) other file(s) in such folders" }
+			$Folder = Get-ExcludedFolder $Pruned[0]
+			& $Fail "Fab buyers would not get $($Pruned[0])$($More): a Fab source zip never holds a $([IO.Path]::GetFileName($Folder)) folder. Move it out of $Folder/." $Pruned[0]
+		}
+		$Unshipped = @($DocsFiles | Where-Object { -not (Get-ExcludedFolder $_) -and -not (Test-FilterRules $Shipped $_) })
 		# A file that no line lists, and one that a '-' line in FilterPlugin.ini takes out again.
 		$Unlisted = @($Unshipped | Where-Object { -not (Find-FilterRule $Shipped $_) })
 		$Excluded = @($Unshipped | Where-Object { Find-FilterRule $Shipped $_ })
@@ -1228,7 +1257,7 @@ function Test-PluginPackage
 		{
 			$More = ''
 			if ($Unlisted.Count -gt 1) { $More = " and $($Unlisted.Count - 1) other file(s) in $Docs/" }
-			& $Fail "Fab buyers would not get $($Unlisted[0])$($More): BuildPlugin, which Epic builds the plugin with, copies $Docs/ only when Config/FilterPlugin.ini lists it. Add /$($script:DocsBase)/... under [FilterPlugin]." $Unlisted[0]
+			& $Fail "Fab buyers would not get $($Unlisted[0])$($More): BuildPlugin, which Epic builds the plugin with, copies $Docs/ only when Config/FilterPlugin.ini lists it. Add /$($script:DocsBase)/... under [FilterPlugin].$Rename" $Unlisted[0]
 		}
 		if ($Excluded.Count -gt 0)
 		{
@@ -1698,14 +1727,23 @@ $script:DocsDatePattern = '^[0-9]{4}-[0-9]{2}-[0-9]{2}\z'
 $script:DocsCommitPattern = '^[0-9a-f]{40}\z'
 $script:DocsRepoPattern = '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z'
 $script:DocsSlugPattern = '^[a-z0-9]+(-[a-z0-9]+)*\z'
-# supportUrl and fabUrl: the site takes an http(s) URL or null.
-$script:DocsUrlPattern = '^https?://\S+\z'
+# A space as JavaScript's \s and trim() know it. .NET's \s also takes U+0085, and its Trim() keeps
+# U+FEFF.
+$script:JsSpaceClass = '[\t\n\v\f\r\p{Zs}\p{Zl}\p{Zp}' + [char]0xFEFF + ']'
+# supportUrl and fabUrl: the site takes an http(s) URL with no space in it, or null.
+$script:DocsUrlPattern = '^https?://(?:(?!' + $script:JsSpaceClass + ').)+\z'
 # First parts of a page's URL the site keeps for versions: /v1.2.0/, /preview/, /releases/.
 $script:DocsReservedSegment = '^(v[0-9].*|preview|releases)\z'
 # The docs site. A full link to it is checked as a link to its own page.
 $script:DocsHost = 'docs.khaos.systems'
-# A string that JavaScript's trim() leaves empty: .NET's Trim() keeps U+FEFF.
-$script:JsBlankPattern = '^[\t\n\v\f\r\p{Zs}\p{Zl}\p{Zp}' + [char]0xFEFF + ']*\z'
+# A string that JavaScript's trim() leaves empty.
+$script:JsBlankPattern = '^' + $script:JsSpaceClass + '*\z'
+# Files the docs site serves outside its products, besides its home and section pages.
+$script:DocsSiteFiles = @('404.html', 'sitemap.xml', 'robots.txt')
+# What a host name loses on the way to ASCII (UTS 46 maps these to nothing), and the full stop it
+# reads as a dot once NFKC has made U+FF0E a dot and U+FF61 an ideographic full stop.
+$script:IdnIgnoredPattern = New-Object regex ('[' + (-join [char[]](0xAD, 0x34F, 0x200B, 0x2060, 0xFEFF)) + [char]0x180B + '-' + [char]0x180D + [char]0xFE00 + '-' + [char]0xFE0F + ']')
+$script:IdnDot = [string][char]0x3002
 
 # Raw HTML as CommonMark reads it: tags and the block starts that need no closing tag.
 $script:HtmlOpenTag = '<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:"[^"]*"|''[^'']*''|[^\s"''=<>`]+))?)*\s*/?>'
@@ -1714,6 +1752,10 @@ $script:HtmlBlockTags = 'address|article|aside|base|basefont|blockquote|body|cap
 # Inline: an element, a comment, an instruction, a declaration or CDATA, each closed.
 $script:InlineHtmlPattern = New-Object regex ('\G(?:' + $script:HtmlOpenTag + '|' + $script:HtmlClosingTag + '|<!--(?:-?>|[\s\S]*?-->)|<\?[\s\S]*?\?>|<![A-Za-z][^>]*>|<!\[CDATA\[[\s\S]*?\]\]>)')
 $script:AutolinkPattern = New-Object regex '\G<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\x00-\x20]*)>'
+# A bare URL, as the site's parser finds one: how it starts, and what ends it, which is any space
+# JavaScript's \s knows or an ASCII control character. U+0085 does not end it.
+$script:UrlStartPattern = New-Object regex '\G[Hh][Tt][Tt][Pp][Ss]?://'
+$script:UrlBreakPattern = New-Object regex ('\G[\x00-\x20\x7F' + (-join [char[]](0xA0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF)) + [char]0x2000 + '-' + [char]0x200A + ']')
 # [label]: destination "title", which may run over a line break before the destination and one
 # before the title. Nothing may follow on the line; a title that is not alone ends the definition
 # at the destination.
@@ -1724,6 +1766,9 @@ function ConvertTo-KebabCase([string]$Name)
 {
 	$Text = [regex]::Replace($Name, '([a-z0-9])([A-Z])', '$1-$2')
 	$Text = [regex]::Replace($Text, '([A-Z]+)([A-Z][a-z])', '$1-$2')
+	# JavaScript's toLowerCase makes a dotted capital I an i and a dot, and a Kelvin sign a k. .NET's
+	# invariant culture leaves both, and the site would give the page another URL.
+	$Text = $Text.Replace([string][char]0x130, 'i' + [char]0x307).Replace([string][char]0x212A, 'k')
 	$Text = [regex]::Replace($Text.ToLowerInvariant(), '[^a-z0-9]+', '-')
 	return $Text.Trim('-')
 }
@@ -1862,12 +1907,63 @@ function Get-RelativeFiles([string]$Dir)
 	return ,$Files
 }
 
+<#
+.SYNOPSIS
+Where text stops being strict JSON, as JavaScript's JSON.parse reads it, or nothing when it is.
+Windows PowerShell's ConvertFrom-Json also takes names without quotes, single quotes, NaN and
+numbers such as 01.
+#>
+function Get-JsonSyntaxProblem([string]$Text)
+{
+	$Token = New-Object regex '\G(?:(?<w>[ \t\n\r]+)|(?<s>"(?:[^"\x5C\x00-\x1F]|\x5C(?:["\x5C/bfnrt]|u[0-9A-Fa-f]{4}))*")|(?<v>-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?(?![0-9])|true|false|null)|(?<p>[{}\[\]:,]))'
+	# What may come next: a value, a value or ], a name, a name or }, a colon, or what follows a value.
+	$Expect = 'value'
+	$Open = New-Object System.Collections.Generic.List[string]
+	$Position = 0
+	while ($Position -lt $Text.Length)
+	{
+		$Match = $Token.Match($Text, $Position)
+		if (-not $Match.Success) { return "at character $($Position + 1)" }
+		$Position += $Match.Length
+		if ($Match.Groups['w'].Success) { continue }
+		$Kind = $Match.Value
+		if ($Match.Groups['s'].Success) { $Kind = 'string' }
+		elseif ($Match.Groups['v'].Success) { $Kind = 'scalar' }
+		$Inner = ''
+		if ($Open.Count -gt 0) { $Inner = $Open[$Open.Count - 1] }
+
+		$Next = $null
+		if (($Expect -ceq 'value' -or $Expect -ceq 'value or ]') -and ($Kind -ceq 'string' -or $Kind -ceq 'scalar')) { $Next = 'after' }
+		elseif (($Expect -ceq 'value' -or $Expect -ceq 'value or ]') -and $Kind -ceq '{') { $Open.Add('{'); $Next = 'name or }' }
+		elseif (($Expect -ceq 'value' -or $Expect -ceq 'value or ]') -and $Kind -ceq '[') { $Open.Add('['); $Next = 'value or ]' }
+		elseif (($Expect -ceq 'name' -or $Expect -ceq 'name or }') -and $Kind -ceq 'string') { $Next = 'colon' }
+		elseif ($Expect -ceq 'colon' -and $Kind -ceq ':') { $Next = 'value' }
+		elseif ($Expect -ceq 'after' -and $Kind -ceq ',' -and $Inner -ceq '{') { $Next = 'name' }
+		elseif ($Expect -ceq 'after' -and $Kind -ceq ',' -and $Inner -ceq '[') { $Next = 'value' }
+		elseif ((($Expect -ceq 'after' -or $Expect -ceq 'name or }') -and $Kind -ceq '}' -and $Inner -ceq '{') -or (($Expect -ceq 'after' -or $Expect -ceq 'value or ]') -and $Kind -ceq ']' -and $Inner -ceq '['))
+		{
+			$Open.RemoveAt($Open.Count - 1)
+			$Next = 'after'
+		}
+		if (-not $Next) { return "at character $($Position - $Match.Length + 1)" }
+		$Expect = $Next
+	}
+	if ($Expect -cne 'after' -or $Open.Count -gt 0) { return 'at its end' }
+	return $null
+}
+
 function Read-DocsManifest([string]$BundleDir)
 {
 	# .NET reads a relative path from the process's folder, which cd does not change.
 	$Path = Join-Paths (Get-FullPath $BundleDir) 'docs.json'
 	if (-not (Test-Path -LiteralPath $Path)) { throw "$BundleDir has no docs.json." }
-	try { return ([IO.File]::ReadAllText($Path) | ConvertFrom-Json) }
+	# As the site reads it: UTF-8 as it is, byte order mark included, then JSON.parse.
+	$Bytes = [IO.File]::ReadAllBytes($Path)
+	if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) { throw 'docs.json starts with a byte order mark, which the docs site cannot read. Save it as UTF-8 without one.' }
+	$Text = (New-Object System.Text.UTF8Encoding $false).GetString($Bytes)
+	$Where = Get-JsonSyntaxProblem $Text
+	if ($Where) { throw "docs.json is not strict JSON ($Where). The docs site reads it with JSON.parse: names in double quotes, and no NaN, single quotes or numbers such as 01." }
+	try { return ($Text | ConvertFrom-Json) }
 	catch { throw "docs.json is not valid JSON: $($_.Exception.Message)" }
 }
 
@@ -1922,9 +2018,9 @@ Build a plugin's docs bundle: Docs plus docs.json, in <OutDir>/<section>/<slug>/
 .DESCRIPTION
 Pages (.md, in that case) and images keep their paths below Docs. Pages and SVGs get LF line
 endings; a page loses any UTF-8 byte order mark, and one saved as UTF-16 becomes UTF-8. An SVG saved
-as UTF-16, a file or folder whose name starts with '.', and anything else, is left out with a
-warning. The version folder is emptied first, so a page deleted since the last build disappears,
-and nothing beside it is touched. docs.json has sorted keys and no timestamps, so the same input
+as UTF-16, a file or folder whose name starts with '.', a folder Fab source zips never hold (such
+as Saved), and anything else, is left out with a warning. The version folder is emptied first, so a
+page deleted since the last build disappears, and nothing beside it is touched. docs.json has sorted keys and no timestamps, so the same input
 gives the same bytes. An empty Version builds a preview, in a folder named preview.
 
 name, description, supportUrl and fabUrl come from the .uplugin, the slug from the repository name.
@@ -2034,6 +2130,17 @@ function New-DocsBundle
 			{
 				$Hidden[$Name] = $true
 				Write-CiAnnotation warning 'Left out of the docs: the docs site publishes no file or folder whose name starts with ".".' -File "$($script:DocsBase)/$Name" -Title 'Docs'
+			}
+			continue
+		}
+		# Fab buyers never get these folders, so the site leaves them out too. One warning per folder.
+		$Pruned = Get-ExcludedFolder $Relative
+		if ($Pruned)
+		{
+			if (-not $Hidden.ContainsKey($Pruned))
+			{
+				$Hidden[$Pruned] = $true
+				Write-CiAnnotation warning "Left out of the docs: a Fab source zip never holds a $([IO.Path]::GetFileName($Pruned)) folder, so buyers would not get it. Move it out." -File "$($script:DocsBase)/$Pruned" -Title 'Docs'
 			}
 			continue
 		}
@@ -2221,23 +2328,87 @@ function Get-DocsFileProblem([string]$BundleDir, [string]$Path, [string]$Url, [s
 	return $null
 }
 
+<# A string with what JavaScript's trim() removes taken off both ends. #>
+function ConvertTo-JsTrimmed([string]$Text)
+{
+	return [regex]::Replace($Text, '^' + $script:JsSpaceClass + '+|' + $script:JsSpaceClass + '+\z', '')
+}
+
 <#
 .SYNOPSIS
-What is wrong with an http(s) link, or nothing: a link to a page of this product on the docs site
-that the bundle does not have.
+How the docs site reads an http(s) link to itself, or nothing for a link elsewhere.
+
+.DESCRIPTION
+Reads the host as the site's URL parser (WHATWG) does: tabs and line breaks dropped, any run of /
+and \ after the scheme skipped, a user name and the default port ignored, and the host %-decoded,
+normalized (NFKC) and lowercased, with ideographic full stops as dots and soft hyphens dropped.
+
+.OUTPUTS
+Path, as written and still %-escaped, and Plain: whether the link is written
+https://docs.khaos.systems/<path> with no user, port, backslash, or empty, . or .. part.
+#>
+function Get-DocsSiteUrl([string]$Url)
+{
+	$Text = [regex]::Replace([regex]::Replace($Url, '[\t\n\r]', ''), '^[\x00-\x20]+|[\x00-\x20]+\z', '')
+	$Match = [regex]::Match($Text, '^([A-Za-z][A-Za-z0-9+.-]*):([/\x5C]*)([^/\x5C?#]*)([^?#]*)')
+	if (-not $Match.Success) { return $null }
+	$Scheme = $Match.Groups[1].Value.ToLowerInvariant()
+	if ($Scheme -cne 'http' -and $Scheme -cne 'https') { return $null }
+	$Authority = $Match.Groups[3].Value
+	$Name = $Authority.Substring($Authority.LastIndexOf('@') + 1)
+	$Colon = $Name.LastIndexOf(':')
+	if ($Colon -ge 0)
+	{
+		$Port = $Name.Substring($Colon + 1)
+		$Name = $Name.Substring(0, $Colon)
+		$Default = '80'
+		if ($Scheme -ceq 'https') { $Default = '443' }
+		if ($Port -and -not ($Port -cmatch '^[0-9]+\z' -and $Port.TrimStart('0') -ceq $Default)) { return $null }
+	}
+	$Name = ConvertFrom-UrlEscapes $Name
+	if ($null -eq $Name) { return $null }
+	$Name = $script:IdnIgnoredPattern.Replace($Name.Normalize([Text.NormalizationForm]::FormKC), '').ToLowerInvariant().Replace($script:IdnDot, '.')
+	if ($Name -cne $script:DocsHost) { return $null }
+
+	$Path = $Match.Groups[4].Value
+	$Parts = @($Path.Split('/') | Select-Object -Skip 1)
+	if ($Parts.Count -gt 0 -and $Parts[$Parts.Count - 1] -eq '') { $Parts = @($Parts | Select-Object -First ($Parts.Count - 1)) }
+	$Plain = ($Text -ceq $Url -and $Match.Groups[2].Value -ceq '//' -and $Authority -match '^docs\.khaos\.systems\z' -and $Path.IndexOf([char]92) -lt 0)
+	foreach ($Part in $Parts) { if ($Part -match '^(?:\.|%2e){0,2}\z') { $Plain = $false } }
+	return [pscustomobject]@{ Path = $Path; Plain = $Plain }
+}
+
+<#
+.SYNOPSIS
+What is wrong with an http(s) link, or nothing: a link to the docs site that its build fails on.
 
 .DESCRIPTION
 The site's build fails on a broken link into the linking page's own copy of the docs: the latest
-version at /<section>/<slug>/, or this version at /<section>/<slug>/v<version>/. A broken link
-anywhere else in a product only warns there, so it passes here. Each page is built as <path>/,
-<path>/index.html and <path>/index.md.
+version at /<section>/<slug>/, or this version at /<section>/<slug>/v<version>/. It also fails on a
+link outside every product, unless that is its home page, a section's page or one of its files. A
+broken link into another product or version only warns there, so it passes here. Each page is built
+as <path>/, <path>/index.html and <path>/index.md. A link to the site written any other way than
+https://docs.khaos.systems/<path> is an error, as this check might read it otherwise than the site.
+
+.PARAMETER Fix
+What to do about a page these docs do not have.
 #>
-function Get-DocsSiteLinkProblem([string]$Url, [string]$BundleDir, $Manifest)
+function Get-DocsSiteLinkProblem([string]$Url, [string]$BundleDir, $Manifest, [string]$Fix = " Link the page's .md file instead.")
 {
-	try { $Uri = New-Object Uri $Url } catch { return $null }
-	if (-not (Test-SameName $Uri.Host $script:DocsHost -IgnoreCase) -or -not $Uri.IsDefaultPort) { return $null }
-	$Path = ConvertFrom-UrlEscapes $Uri.AbsolutePath
+	$Site = Get-DocsSiteUrl $Url
+	if (-not $Site) { return $null }
+	if (-not $Site.Plain) { return "Link $Url goes to the docs site in an unusual form. Write it as https://docs.khaos.systems/<path>, with no empty, . or .. part, so this check reads it as the site does." }
+	$Path = ConvertFrom-UrlEscapes $Site.Path
 	if ($null -eq $Path) { return "Link $Url is not a valid link: each % must start a UTF-8 escape, such as %20. Write a plain % as %25." }
+
+	$Parts = @($Path.Split('/') | Where-Object { $_ })
+	# The home page, and the site's copies of images under /_files/, where a broken link only warns.
+	if ($Parts.Count -eq 0 -or $Parts[0] -ceq '_files') { return $null }
+	if (-not (Test-NameIn $Parts[0] $script:DocsSections))
+	{
+		if ($Parts.Count -eq 1 -and (Test-NameIn $Parts[0] $script:DocsSiteFiles)) { return $null }
+		return "Link $Url is broken: the docs site has no page there, and fails its build on it."
+	}
 	$Product = "/$($Manifest.section)/$($Manifest.slug)"
 	if (-not ($Path -ceq $Product -or $Path.StartsWith("$Product/", [StringComparison]::Ordinal))) { return $null }
 
@@ -2259,7 +2430,7 @@ function Get-DocsSiteLinkProblem([string]$Url, [string]$BundleDir, $Manifest)
 	if ($Rest -cmatch '^(.*/)?index\.(?:html|md)\z') { $Page = $Matches[1] }
 	elseif (-not $Rest.EndsWith('/')) { $Page = "$Rest/" }
 	if (-not $Page -or (Test-NameIn $Page $Pages)) { return $null }
-	return "Link $Url is broken: these docs have no page there, and the docs site fails its build on it. Link the page's .md file instead."
+	return "Link $Url is broken: these docs have no page there, and the docs site fails its build on it.$Fix"
 }
 
 <#
@@ -2283,11 +2454,15 @@ function Get-DocsLinkProblem
 		[Parameter(Mandatory)]$Manifest
 	)
 
-	$Url = $Url.Trim()
+	# As the site reads them. Its image check trims the path too, but the image import after it
+	# does not, so an image path may not start or end with a space.
+	$Raw = $Url
+	$Url = ConvertTo-JsTrimmed $Url
 	$HasScheme = $Url -match '^[A-Za-z][A-Za-z0-9+.-]*:'
 	if ($Image)
 	{
 		if (-not $Url) { return 'An image needs the path of a file in the docs folder.' }
+		if ($Raw -cne $Url) { return "Image '$Raw' starts or ends with a space. Remove it: the docs site looks for the file with the space, and fails its build." }
 		if ($HasScheme) { return "Image $Url is remote, and the docs site loads no remote images. Put the file in the docs folder and give its path relative to this page." }
 		if ($Url.StartsWith('/')) { return "Image $Url is root-relative. Write it relative to this page." }
 		# The site takes the whole path as the file's name, and a name holds no ? or #.
@@ -2400,9 +2575,9 @@ text. Enough to tell an empty heading, such as "# [](Page.md)", from one with a 
 function Get-MarkdownHeadingText([string]$Text, [hashtable]$Labels = @{})
 {
 	# Code spans and escaped characters show as text; mark them so brackets in them pair with nothing.
-	$Text = [regex]::Replace($Text, '(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)', { param($Match) if ($Match.Groups[2].Value.Trim()) { 'x' } else { ' ' } })
+	$Text = [regex]::Replace($Text, '(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)', { param($Match) if ($Match.Groups[2].Value -cnotmatch $script:JsBlankPattern) { 'x' } else { ' ' } })
 	$Text = [regex]::Replace($Text, '\\[!-/:-@\[-`{-~]', 'x')
-	$Text = [regex]::Replace($Text, '&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});', { param($Match) if ([System.Net.WebUtility]::HtmlDecode($Match.Value).Trim()) { 'x' } else { ' ' } })
+	$Text = [regex]::Replace($Text, '&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});', { param($Match) if ([System.Net.WebUtility]::HtmlDecode($Match.Value) -cnotmatch $script:JsBlankPattern) { 'x' } else { ' ' } })
 	$Inline = '!?\[([^\[\]]*)\]\((?:[^()]|\([^()]*\))*\)'
 	$Reference = { param($Match) if ($Labels.ContainsKey((Format-ReferenceLabel $Match.Groups[2].Value))) { $Match.Groups[1].Value } else { $Match.Value } }
 	do
@@ -2412,7 +2587,7 @@ function Get-MarkdownHeadingText([string]$Text, [hashtable]$Labels = @{})
 		$Text = [regex]::Replace($Text, '!?\[([^\[\]]*)\]\[([^\[\]]+)\]', $Reference)
 		$Text = [regex]::Replace($Text, '!?\[([^\[\]]+)\]\[\]', { param($Match) if ($Labels.ContainsKey((Format-ReferenceLabel $Match.Groups[1].Value))) { $Match.Groups[1].Value } else { $Match.Value } })
 	} while ($Text -cne $Before)
-	return $Text.Trim()
+	return $Text
 }
 
 <#
@@ -2423,9 +2598,12 @@ The links, images and raw HTML in a run of Markdown lines, such as a paragraph.
 Read in one pass from left to right, as CommonMark does: whichever starts first of a code span, raw
 HTML or an autolink wins, and all three bind tighter than the brackets of a link. A link's
 destination is read where its ] is, so text after it cannot take it apart. A reference image,
-![alt][label] with label defined, comes back as an imageref with its label. An http(s) URL left in
-the text comes back as a link, as GFM makes one of it. Only ASCII spaces, tabs and line breaks
-count as space, as in CommonMark.
+![alt][label] with label defined, comes back as an imageref with its label. A bare http(s) URL
+comes back as a link, as GFM makes one of it, raw as written: it wins over code spans, escapes and
+brackets that start inside it, and ends at any Unicode space or <, less trailing punctuation and
+entities such as &amp;. A URL in a link's text is no link. After a [ still open, the site reads a
+URL another way; one that may come out different there is a looseurl. Elsewhere only ASCII spaces,
+tabs and line breaks count as space, as in CommonMark.
 
 .PARAMETER Lines
 The lines, each with Line (its number in the file) and Text.
@@ -2434,7 +2612,7 @@ The lines, each with Line (its number in the file) and Text.
 The page's defined reference labels, normalized. [text][label] is a link only when label is one.
 
 .OUTPUTS
-Kind (link, image, imageref or html), Value and Line.
+Kind (link, image, imageref, looseurl or html), Value and Line.
 #>
 function Get-DocsInlineItems
 {
@@ -2471,10 +2649,87 @@ function Get-DocsInlineItems
 	}
 	$Add = {
 		param([string]$Kind, [string]$Value, [int]$Offset)
-		$Items.Add([pscustomobject]@{ Kind = $Kind; Value = $Value; Line = (& $LineAt $Offset) })
+		$Item = [pscustomobject]@{ Kind = $Kind; Value = $Value; Line = (& $LineAt $Offset) }
+		$Items.Add($Item)
+		return $Item
 	}
 	# Whether the backslash at an offset escapes the character after it: ASCII punctuation.
 	$Escapes = { param([int]$At) return ($At + 1 -lt $Length -and $Punctuation.IndexOf($Text[$At + 1]) -ge 0) }
+
+	# Bare URLs, as GFM's literal autolinks: Item, and At, its offset.
+	$Bare = New-Object System.Collections.Generic.List[object]
+	$Breaks = { param([int]$At) return ($At -ge $Length -or $script:UrlBreakPattern.IsMatch($Text, $At)) }
+	$IsLetter = { param([char]$C) $N = [int]$C; return (($N -ge 97 -and $N -le 122) -or ($N -ge 65 -and $N -le 90)) }
+	# Whether only trailing punctuation is left at an offset before a URL's end: such marks, entities
+	# such as &amp;, and ] unless more of the URL follows it.
+	$Trails = {
+		param([int]$At)
+		$Q = $At
+		while ($true)
+		{
+			if (& $Breaks $Q) { return $true }
+			$C = $Text[$Q]
+			if ($C -eq '<') { return $true }
+			if ('!"'')*,.:;?_~'.IndexOf($C) -ge 0) { $Q++; continue }
+			if ($C -eq '&')
+			{
+				$R = $Q + 1
+				while ($R -lt $Length -and (& $IsLetter $Text[$R])) { $R++ }
+				if ($R -eq $Q + 1 -or $R -ge $Length -or $Text[$R] -ne ';') { return $false }
+				$Q = $R + 1
+				continue
+			}
+			if ($C -ne ']') { return $false }
+			$Q++
+			if ((& $Breaks $Q) -or $Text[$Q] -eq '(' -or $Text[$Q] -eq '[') { return $true }
+		}
+	}
+	# Where a URL that starts at an offset ends, or -1 for none: http:// or https:// after anything
+	# but a letter, a domain with no _ in its last two parts, then all up to a space or <, less what
+	# trails it. A ) is part of it when it closes a ( in it. After a [ still open, the domain needs a
+	# dot.
+	$UrlEnd = {
+		param([int]$At, [bool]$InBrackets)
+		if ($At -gt 0 -and (& $IsLetter $Text[$At - 1])) { return -1 }
+		$Start = $script:UrlStartPattern.Match($Text, $At)
+		if (-not $Start.Success) { return -1 }
+		$P = $At + $Start.Length
+		# The domain needs a character that is not ASCII punctuation; - and . do not count.
+		$Seen = $false
+		$Dots = 0
+		$Last = $false
+		$BeforeLast = $false
+		while (-not (& $Breaks $P))
+		{
+			$C = $Text[$P]
+			if ($C -eq '.' -or $C -eq '_')
+			{
+				if (& $Trails $P) { break }
+				if ($C -eq '_') { $Last = $true }
+				else { $BeforeLast = $Last; $Last = $false; $Dots++ }
+			}
+			elseif ($C -eq '-') { }
+			elseif ($Punctuation.IndexOf($C) -ge 0) { break }
+			else { $Seen = $true }
+			$P++
+		}
+		if ($Last -or $BeforeLast -or -not $Seen -or ($InBrackets -and $Dots -eq 0)) { return -1 }
+		$Opened = 0
+		$Closed = 0
+		while (-not (& $Breaks $P))
+		{
+			$C = $Text[$P]
+			if ($C -eq '(') { $Opened++ }
+			elseif ($C -eq ')' -and $Closed -lt $Opened) { $Closed++ }
+			elseif ('!"&'')*,.:;<?]_~'.IndexOf($C) -ge 0)
+			{
+				if (& $Trails $P) { break }
+				if ($C -eq ')') { $Closed++ }
+			}
+			$P++
+		}
+		return $P
+	}
 
 	# Brackets waiting for their ], innermost last.
 	$Openers = New-Object System.Collections.Generic.List[object]
@@ -2482,6 +2737,31 @@ function Get-DocsInlineItems
 	while ($Index -lt $Length)
 	{
 		$Char = $Text[$Index]
+
+		# A bare URL wins over anything that starts inside it: code spans, escapes and brackets.
+		if ($Char -eq 'h' -or $Char -eq 'H')
+		{
+			$UrlStop = & $UrlEnd $Index ($Openers.Count -gt 0)
+			if ($UrlStop -gt $Index)
+			{
+				$Url = $Text.Substring($Index, $UrlStop - $Index)
+				$Kind = 'link'
+				if ($Openers.Count -gt 0)
+				{
+					# After a [ still open, the site reads a URL another way: escapes and entities
+					# decoded, code and emphasis cut out, up to an ASCII space. A loose URL is one
+					# that this may change.
+					$RawEnd = $UrlStop
+					while ($RawEnd -lt $Length -and $Spaces.IndexOf($Text[$RawEnd]) -lt 0) { $RawEnd++ }
+					$Tail = $Text.Substring($UrlStop, $RawEnd - $UrlStop)
+					if ($Url -match '[\x5C&`*~<\[]' -or $Tail -notmatch '^[.,:;!?''")\]]*\z') { $Kind = 'looseurl' }
+				}
+				$Bare.Add([pscustomobject]@{ At = $Index; Item = (& $Add $Kind $Url $Index) })
+				& $Blank $Index $UrlStop
+				$Index = $UrlStop
+				continue
+			}
+		}
 
 		# An escaped character is plain text.
 		if ($Char -eq '\' -and (& $Escapes $Index))
@@ -2519,11 +2799,11 @@ function Get-DocsInlineItems
 			# Raw HTML before autolinks, as the site's parser reads <!x@example.com>. An email
 			# autolink holds nothing the rules look at, so it is left as text.
 			$Match = $script:InlineHtmlPattern.Match($Text, $Index)
-			if ($Match.Success) { & $Add 'html' $Match.Value $Index }
+			if ($Match.Success) { $null = & $Add 'html' $Match.Value $Index }
 			else
 			{
 				$Match = $script:AutolinkPattern.Match($Text, $Index)
-				if ($Match.Success) { & $Add 'link' $Match.Groups[1].Value $Index }
+				if ($Match.Success) { $null = & $Add 'link' $Match.Groups[1].Value $Index }
 			}
 			if (-not $Match.Success) { $Index++; continue }
 			& $Blank $Index ($Index + $Match.Length)
@@ -2606,7 +2886,7 @@ function Get-DocsInlineItems
 			if ($Ok -and $P -lt $Length -and $Text[$P] -eq ')')
 			{
 				$Destination = ConvertFrom-MarkdownDestination $Text.Substring($From, $To - $From)
-				& $Add $Kind $Destination $Opener.At
+				$null = & $Add $Kind $Destination $Opener.At
 				& $Blank $Next ($P + 1)
 				$End = $P + 1
 			}
@@ -2634,13 +2914,19 @@ function Get-DocsInlineItems
 			}
 			if ($Labels.ContainsKey((Format-ReferenceLabel $Label)))
 			{
-				if ($Opener.Image) { & $Add 'imageref' $Label $Opener.At }
+				if ($Opener.Image) { $null = & $Add 'imageref' $Label $Opener.At }
 				$End = $After
 			}
 		}
 
 		if ($End -lt 0) { $Index++; continue }
-		# GFM makes no link of a URL in a link's text or an image's alt text.
+		# GFM makes no link of a URL in a link's text or an image's alt text. A loose URL that took
+		# in a [ stays: the site pairs the brackets another way then.
+		foreach ($Url in @($Bare | Where-Object { $_.At -gt $Opener.At -and $_.At -lt $Index -and -not ($_.Item.Kind -eq 'looseurl' -and $_.Item.Value.Contains('[')) }))
+		{
+			[void]$Items.Remove($Url.Item)
+			[void]$Bare.Remove($Url)
+		}
 		& $Blank $Opener.At $End
 		# A link inside a link is not one, so a link makes each [ before it inactive. A ![ stays
 		# active: an image's alt text may hold a link.
@@ -2649,21 +2935,6 @@ function Get-DocsInlineItems
 			foreach ($Earlier in $Openers) { if (-not $Earlier.Image) { $Earlier.Active = $false } }
 		}
 		$Index = $End
-	}
-
-	# A URL in the plain text that remains: GFM ends it at a space or <, and leaves off trailing
-	# punctuation and a ) it does not open.
-	foreach ($Match in [regex]::Matches((-join $Masked), '(?<![A-Za-z])[Hh][Tt][Tt][Pp][Ss]?://[^\x00-\x20<]+'))
-	{
-		$Url = $Match.Value
-		while ($Url)
-		{
-			$Last = $Url[$Url.Length - 1]
-			$Unopened = ($Last -eq ')' -and $Url.Split(')').Count -gt $Url.Split('(').Count)
-			if (-not $Unopened -and '!"''*,.:;?]_~'.IndexOf($Last) -lt 0) { break }
-			$Url = $Url.Substring(0, $Url.Length - 1)
-		}
-		if ($Url) { & $Add 'link' $Url $Match.Index }
 	}
 
 	return ,$Items.ToArray()
@@ -2976,6 +3247,8 @@ function Test-DocsMarkdown
 					& $CloseLeaf
 					$Leaf.Kind = 'table'
 					& $AddRow $Header.Line $Header.Text
+					# The site's parser aligns a column with a style attribute, which its CSP blocks.
+					if ($Body.IndexOf(':') -ge 0) { & $Problem $Number 'The table aligns its columns with :, which the docs site cannot show yet: its build rejects the style that gives them. Use plain --- in this row.' }
 					continue
 				}
 			}
@@ -3059,7 +3332,8 @@ function Test-DocsMarkdown
 	{
 		if ($H1[0].Nested) { & $Problem $H1[0].Line 'The H1 is inside a quote, list item or footnote. Start the page with a plain "# Title"; it is the page title.' }
 		elseif ($First -ne $H1[0].Line) { & $Problem $First "Content before the H1 on line $($H1[0].Line). The H1 is the page title and must come first." }
-		if (-not (Get-MarkdownHeadingText $H1[0].Text $Labels)) { & $Problem $H1[0].Line 'The H1 is empty; it is the page title.' }
+		# Blank as the site's JavaScript trims it: U+FEFF is a space there, U+0085 is not.
+		if ((Get-MarkdownHeadingText $H1[0].Text $Labels) -cmatch $script:JsBlankPattern) { & $Problem $H1[0].Line 'The H1 is empty; it is the page title.' }
 		foreach ($Extra in @($H1 | Select-Object -Skip 1)) { & $Problem $Extra.Line 'More than one H1. The first is the page title; use ## for sections.' }
 	}
 	$Last = 1
@@ -3082,6 +3356,11 @@ function Test-DocsMarkdown
 		if ($Item.Kind -eq 'html')
 		{
 			& $Problem $Item.Line "Raw HTML is not allowed: $($Item.Value). KhaosDocs shows it as text and the docs site rejects it. Use Markdown, or put it in backticks."
+			continue
+		}
+		if ($Item.Kind -eq 'looseurl')
+		{
+			if (Get-DocsSiteUrl $Item.Value) { & $Problem $Item.Line "Link $($Item.Value) comes after a [ that is still open, where the docs site reads a bare URL another way. Write it as <$($Item.Value)>, or close the [ first." }
 			continue
 		}
 		if ($Item.Kind -eq 'imageref')
@@ -3330,6 +3609,12 @@ function Test-DocsBundle
 	{
 		$Url = & $Value $Key
 		if ($null -ne $Url -and -not ($Url -is [string] -and $Url -cmatch $script:DocsUrlPattern)) { & $Fail "docs.json: `"$Key`" must be an http(s) URL or null." }
+		elseif ($null -ne $Url)
+		{
+			# The site links both from its pages, and checks them as it checks a page's links.
+			$Problem = Get-DocsSiteLinkProblem $Url $Root $Manifest ''
+			if ($Problem) { & $Fail "docs.json: `"$Key`": $Problem" }
+		}
 	}
 	$Glyph = & $Value 'glyph'
 	if ($null -ne $Glyph -and -not ($Glyph -is [string] -and $Glyph -cmatch '^[A-Za-z]{1,2}\z')) { & $Fail 'docs.json: "glyph" must be one or two letters.' }

@@ -329,6 +329,16 @@ try
 			Expect = 'file=Docs/Readme.md,title=Fab requirement::Fab buyers would not get Docs/Readme.md: BuildPlugin, which Epic builds the plugin with, copies Docs/ only when Config/FilterPlugin.ini lists it. Add /Docs/... under [FilterPlugin].'
 		}
 		@{
+			Name = 'a [FilterPlugin] header in another case, which BuildPlugin skips'
+			Break = { New-TestFile "$Plugin\Config\FilterPlugin.ini" "[filterplugin]`n/Docs/...`n/Extras/...`n" }
+			Expect = 'Add /Docs/... under [FilterPlugin]. BuildPlugin reads only a section named [FilterPlugin], in that case: rename [filterplugin].'
+		}
+		@{
+			Name = 'docs in a Saved folder, which no source zip holds'
+			Break = { New-TestFile "$Plugin\Docs\Saved\Old.md" "# Old`n" }
+			Expect = 'file=Docs/Saved/Old.md,title=Fab requirement::Fab buyers would not get Docs/Saved/Old.md: a Fab source zip never holds a Saved folder. Move it out of Docs/Saved/.'
+		}
+		@{
 			Name = 'module with no Build.cs'
 			Break = { Remove-Item "$Plugin\Source\SampleEditor\SampleEditor.Build.cs" }
 			Expect = 'no SampleEditor.Build.cs'
@@ -732,6 +742,8 @@ try
 
 	Write-Host 'Docs bundles'
 	Check 'slugs are kebab-case' ((ConvertTo-KebabCase 'KhaosFolderIcons') -eq 'khaos-folder-icons' -and (ConvertTo-KebabCase 'UIWidgets') -eq 'ui-widgets' -and (ConvertTo-KebabCase 'Khaos Docs 2') -eq 'khaos-docs-2')
+	Check 'a dotted capital I and a Kelvin sign lower as JavaScript lowers them' ((ConvertTo-KebabCase "$([char]0x130)x") -ceq 'i-x' -and (ConvertTo-KebabCase "$([char]0x212A)elvin") -ceq 'kelvin')
+	Check 'strict JSON passes; a trailing comma, a second value or nothing does not' ($null -eq (Get-JsonSyntaxProblem "{ `"a`": [1, -2.5e3, true, null, `"x`"], `"b`": {} }`n") -and (Get-JsonSyntaxProblem '{"a": 1,}') -and (Get-JsonSyntaxProblem '{} {}') -and (Get-JsonSyntaxProblem ''))
 	Check "glyphs leave out the maker's name" ((Get-DocsGlyph 'Khaos Palette' 'Khaos Systems') -eq 'PA' -and (Get-DocsGlyph 'Khaos Folder Icons' 'Khaos Systems') -eq 'FI' -and (Get-DocsGlyph 'Sample' 'Example Studio') -eq 'SA')
 	Check 'glyphs are letters only, or none' ((Get-DocsGlyph 'Khaos 3D Tools' 'Khaos Systems') -ceq 'DT' -and $null -eq (Get-DocsGlyph 'Khaos 2048' 'Khaos Systems') -and $null -eq (Get-DocsGlyph 'X' 'Example Studio'))
 	Check 'page URLs are kebab-case paths, the landing page at the root' ((Get-DocsPagePath 'Sample.md' 'Sample.md').Path -eq '' -and (Get-DocsPagePath 'Guides/First Steps.md' 'Sample.md').Path -eq 'guides/first-steps/')
@@ -865,6 +877,7 @@ try
 	New-TestPng "$Edge\Docs\.attachments\A.png"
 	New-TestPng "$Edge\Docs\.attachments\B.png"
 	New-TestFile "$Edge\Docs\Guides\.draft.md" "# Draft`n"
+	New-TestFile "$Edge\Docs\Saved\Old.md" "# Old`n"
 	$script:Other = $null
 	$Annotations = @(Get-Annotations { $script:Other = New-DocsBundle -PluginDir $Edge -OutDir "$Temp\docs-edge-out" -Ref 'main' -Commit $Commit -Repo 'Example/Edge' -Released '2026-11-09' })
 	Check 'a SupportURL that is not an http(s) URL is left out, with a warning' ($null -eq $script:Other.Manifest.supportUrl -and @($Annotations | Where-Object { $_ -like '::warning file=Sample.uplugin,title=Docs::SupportURL is not an http(s) URL*' }).Count -eq 1) ($Annotations -join "`n")
@@ -874,6 +887,7 @@ try
 	Check 'a UTF-16 page becomes UTF-8' (Same ([IO.File]::ReadAllBytes("$($script:Other.Dir)\Wide.md")) ((New-Object System.Text.UTF8Encoding $false).GetBytes("# Wide`n`nCaf$([char]0xE9).`n")))
 	Check 'CR line endings become LF' ([IO.File]::ReadAllText("$($script:Other.Dir)\Mac.md") -ceq "# Mac`n`nOld line endings.`n")
 	Check 'names that start with . are left out, one warning each' (@($Annotations | Where-Object { $_ -like '::warning file=Docs/.attachments,title=Docs::*start*"."*' }).Count -eq 1 -and @($Annotations | Where-Object { $_ -like '::warning file=Docs/Guides/.draft.md,title=Docs::*' }).Count -eq 1) ($Annotations -join "`n")
+	Check 'a Saved folder is left out, with a warning' (@($Annotations | Where-Object { $_ -like '::warning file=Docs/Saved,title=Docs::*never holds a Saved folder*' }).Count -eq 1) ($Annotations -join "`n")
 	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $script:Other.Dir }
 	Check 'and then they pass' ($Annotations.Count -eq 0) ($Annotations -join "`n")
 
@@ -979,6 +993,18 @@ try
 		@{ Name = "a full link to a page this version's docs do not have"; Text = "# Title`n`nSee [it](https://docs.khaos.systems/unreal/sample-docs/v1.2.3/nope/).`n"; Line = 3; Expect = 'these docs have no page there' }
 		@{ Name = 'a full link to an image, which the site keeps elsewhere'; Text = "# Title`n`nSee [it](http://Docs.Khaos.Systems/unreal/sample-docs/Images/Shot.png).`n"; Line = 3; Expect = 'these docs have no page there' }
 		@{ Name = 'a URL in the text to a page these docs do not have'; Text = "# Title`n`nSee https://docs.khaos.systems/unreal/sample-docs/guides/nope/.`n"; Line = 3; Expect = 'these docs have no page there' }
+		@{ Name = 'a URL in the text that runs on into code'; Text = "# Title`n`nSee https://docs.khaos.systems/unreal/sample-docs/guides/setup/``b`` here.`n"; Line = 3; Expect = 'Link https://docs.khaos.systems/unreal/sample-docs/guides/setup/`b` is broken' }
+		@{ Name = 'a URL in the text that runs on into a link'; Text = "# Title`n`nSee https://docs.khaos.systems/unreal/sample-docs/guides/setup/[x](#y) here.`n"; Line = 3; Expect = 'Link https://docs.khaos.systems/unreal/sample-docs/guides/setup/[x is broken' }
+		@{ Name = 'a URL in the text that runs on over an escape'; Text = "# Title`n`nSee https://docs.khaos.systems/unreal/sample-docs/guides/setup/\_old.`n"; Line = 3; Expect = 'goes to the docs site in an unusual form' }
+		@{ Name = 'a URL after a [ still open, which the site reads another way'; Text = "# Title`n`n[See https://docs.khaos.systems/unreal/sample-docs/guides/setup/**`n"; Line = 3; Expect = 'comes after a [ that is still open' }
+		@{ Name = 'a full link to the site with one slash'; Text = "# Title`n`nSee [it](https:/docs.khaos.systems/unreal/sample-docs/guides/setup/).`n"; Line = 3; Expect = 'goes to the docs site in an unusual form' }
+		@{ Name = 'a full link to the site with an empty part'; Text = "# Title`n`nSee [it](https://docs.khaos.systems/unreal//sample-docs/guides/setup/).`n"; Line = 3; Expect = 'goes to the docs site in an unusual form' }
+		@{ Name = 'a full link to the site with an escaped dot in its host'; Text = "# Title`n`nSee [it](https://docs%2Ekhaos.systems/unreal/sample-docs/guides/setup/).`n"; Line = 3; Expect = 'goes to the docs site in an unusual form' }
+		@{ Name = 'a full link to the site outside every product'; Text = "# Title`n`nSee [it](https://docs.khaos.systems/guides/setup/).`n"; Line = 3; Expect = 'the docs site has no page there' }
+		@{ Name = 'an image path that starts with a space'; Text = "# Title`n`n![Shot](< Images/Shot.png>)`n"; Line = 3; Expect = 'starts or ends with a space' }
+		@{ Name = 'a table that aligns its columns'; Text = "# Title`n`n| Name | Default |`n| :--- | ---: |`n| a | b |`n"; Line = 4; Expect = 'aligns its columns with :' }
+		@{ Name = 'a table of one column, aligned with a colon'; Text = "# Title`n`nName`n:---`n"; Line = 4; Expect = 'aligns its columns with :' }
+		@{ Name = 'an H1 of a byte order mark, which JavaScript trims'; Text = "# $([char]0xFEFF)`n`nText.`n"; Line = 1; Expect = 'The H1 is empty' }
 		@{ Name = 'a definition of a full link to a page these docs do not have'; Text = "# Title`n`nSee [it].`n`n[it]: https://docs.khaos.systems/unreal/sample-docs/nope`n"; Line = 5; Expect = 'these docs have no page there' }
 		@{ Name = 'a link whose target holds a no-break space'; Text = "# Title`n`nSee [it](Miss$([char]0xA0)ing.md).`n"; Line = 3; Expect = 'is broken' }
 		@{ Name = 'an image whose path holds an ideographic space'; Text = "# Title`n`n![it](Images/Sh$([char]0x3000)ot.png)`n"; Line = 3; Expect = 'is broken' }
@@ -1016,7 +1042,10 @@ try
 		@{ Name = 'a thematic break under a table, then an H4 under an H3'; Text = "# Title`n`n## A`n`n### B`n`n| x | y |`n|---|---|`n| 1 | 2 |`n---`n#### C`n" }
 		@{ Name = '=== under a table, as a row'; Text = "# Title`n`n| Name | Default |`n| --- | --- |`n| a | b |`n===`n" }
 		@{ Name = 'a link split across table cells'; Text = "# Title`n`n| a | b |`n|---|---|`n| [x | y](Missing.md) |`n" }
-		@{ Name = 'a table of one column, with a colon'; Text = "# Title`n`nName`n:---`n" }
+		@{ Name = 'URLs in the text that end at a no-break space, an ideographic space and an entity'; Text = "# Title`n`nSee https://docs.khaos.systems/unreal/sample-docs/guides/setup/$([char]0xA0)now, https://docs.khaos.systems/unreal/sample-docs/guides/setup/$([char]0x3000)then and https://docs.khaos.systems/unreal/sample-docs/guides/setup/&amp; more.`n" }
+		@{ Name = 'a URL after a [ still open, which the site reads the same'; Text = "# Title`n`n[See https://docs.khaos.systems/unreal/sample-docs/guides/setup/.`n" }
+		@{ Name = 'links to the home page, a section page and the sitemap'; Text = "# Title`n`nSee [home](https://docs.khaos.systems/), [plugins](https://docs.khaos.systems/unreal/) and [map](https://docs.khaos.systems/sitemap.xml).`n" }
+		@{ Name = 'a link target that ends in a byte order mark, which JavaScript trims'; Text = "# Title`n`nSee [it](<Sample.md$([char]0xFEFF)>).`n" }
 		@{ Name = 'a pointed link target that looks like a tag'; Text = "# Title`n`nSee [it](<First Steps.md>).`n"; Files = @('First Steps.md') }
 		@{ Name = 'a link to an image in the docs, in a private repository'; Text = "# Title`n`nSee [it](Images/Shot.png).`n"; Private = $true }
 		@{ Name = 'full links to pages of these docs, and to other products and versions'; Text = (@(
@@ -1091,6 +1120,13 @@ try
 		@{ Find = '"preview": false'; Replace = '"preview": "no"'; Expect = '"preview" must be true or false.' }
 		@{ Find = '"5\.8"'; Replace = '5.8'; Expect = '"unreal.engines" must be a list of versions' }
 		@{ Find = '"type": "Editor"'; Replace = '"kind": "Editor"'; Expect = '"unreal.modules" must be a list' }
+		@{ Find = '"schema": 1'; Replace = 'schema: 1'; Expect = 'docs.json is not strict JSON (at character' }
+		@{ Find = '"schema": 1'; Replace = '"schema": NaN'; Expect = 'docs.json is not strict JSON' }
+		@{ Find = '"schema": 1'; Replace = '"schema": 01'; Expect = 'docs.json is not strict JSON' }
+		@{ Find = '"slug": "sample-docs"'; Replace = '"slug": ''sample-docs'''; Expect = 'docs.json is not strict JSON' }
+		@{ Find = '"supportUrl": "[^"]*"'; Replace = '"supportUrl": "https://docs.khaos.systems/unreal/sample-docs/support/"'; Expect = 'docs.json: "supportUrl": Link https://docs.khaos.systems/unreal/sample-docs/support/ is broken: these docs have no page there' }
+		@{ Find = '"fabUrl": "[^"]*"'; Replace = '"fabUrl": "https://docs.khaos.systems/fab/"'; Expect = 'docs.json: "fabUrl": Link https://docs.khaos.systems/fab/ is broken: the docs site has no page there' }
+		@{ Find = '"supportUrl": "[^"]*"'; Replace = ('"supportUrl": "https://example.com/' + [char]0xFEFF + '"'); Expect = '"supportUrl" must be an http(s) URL or null.' }
 	)
 	foreach ($Rule in $JsonRules)
 	{
@@ -1110,6 +1146,12 @@ try
 	Write-Utf8File "$($Bundle.Dir)\docs.json" $Json.Replace('"schema":', '"Schema":').Replace('"landing":', '"Landing":').Replace('"version":', '"Version":')
 	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
 	Check 'reports docs.json keys in the wrong case as missing' (@($Annotations | Where-Object { $_ -match 'docs.json has no "(schema|landing|version)"\.' }).Count -eq 3) ($Annotations -join "`n")
+	Write-Utf8File "$($Bundle.Dir)\docs.json" ([regex]::Replace($Json, '"supportUrl": "[^"]*"', '"supportUrl": "https://docs.khaos.systems/unreal/sample-docs/guides/setup/"'))
+	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
+	Check 'a supportUrl to a page of these docs passes' ($Annotations.Count -eq 0) ($Annotations -join "`n")
+	[IO.File]::WriteAllBytes("$($Bundle.Dir)\docs.json", [byte[]](@(0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes($Json)))
+	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
+	Check 'reports docs.json with a byte order mark, which JSON.parse rejects' (@($Annotations | Where-Object { $_.Contains('docs.json starts with a byte order mark') }).Count -eq 1) ($Annotations -join "`n")
 	Write-Utf8File "$($Bundle.Dir)\docs.json" $Json
 
 	$FileRules = @(
