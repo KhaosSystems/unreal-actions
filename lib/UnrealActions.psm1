@@ -1760,6 +1760,11 @@ $script:UrlBreakPattern = New-Object regex ('\G[\x00-\x20\x7F' + (-join [char[]]
 # before the title. Nothing may follow on the line; a title that is not alone ends the definition
 # at the destination.
 $script:DefinitionPattern = New-Object regex '\A\[((?:[^\[\]\\]|\\[\s\S]){1,999})\]:[ \t]*\n?[ \t]*(?:<((?:[^<>\n\\]|\\.)*)>|(?!<)([^\x00-\x20]+))(?:(?:[ \t]+|[ \t]*\n[ \t]*)("(?:[^"\\]|\\[\s\S])*"|''(?:[^''\\]|\\[\s\S])*''|\((?:[^()\\]|\\[\s\S])*\)))?[ \t]*(?=\n|\z)'
+# A backslash escape, or a character reference such as &amp; or &#46;, as CommonMark reads them.
+$script:MarkdownEscapePattern = '\\([!-/:-@\[-`{-~])|&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});'
+# Front matter as the docs site finds it: its first line that is not blank starts with --- or +++,
+# even when that line is the text of an underlined heading.
+$script:FrontMatterPattern = '\A(?:' + $script:JsSpaceClass + '*\n)?(?:---|\+\+\+)'
 
 <# KhaosFolderIcons -> khaos-folder-icons, UIWidgets -> ui-widgets, as the docs site does it. #>
 function ConvertTo-KebabCase([string]$Name)
@@ -2432,7 +2437,7 @@ function Get-DocsSiteLinkProblem([string]$Url, [string]$BundleDir, $Manifest, [s
 	if ($Rest -cmatch '^(.*/)?index\.(?:html|md)\z') { $Page = $Matches[1] }
 	elseif (-not $Rest.EndsWith('/')) { $Page = "$Rest/" }
 	if (-not $Page -or (Test-NameIn $Page $Pages)) { return $null }
-	return "Link $Url is broken: these docs have no page there, and the docs site fails its build on it.$Fix"
+	return "Link $Url is broken: these docs have no page there.$Fix"
 }
 
 <#
@@ -2441,7 +2446,7 @@ What is wrong with one link or image on a page of a docs bundle, or nothing.
 
 .DESCRIPTION
 Contract rules 4 to 8: links to pages and images, and all images, must resolve in the bundle with
-exact case, images must be local, links to other repository files work only for a public
+exact case, images must be local image files, links to other repository files work only for a public
 repository, full links to this product's pages on the docs site must name a page of the bundle, and
 only http(s), mailto and #anchor links leave the page. Root-relative links are an error.
 #>
@@ -2473,8 +2478,17 @@ function Get-DocsLinkProblem
 		if ($null -eq $Path) { return "Image $Url is not a valid link: each % must start a UTF-8 escape, such as %20. Write a plain % as %25." }
 		# The site reads the path decoded, so %2F at its start is a / there too.
 		if ($Path.StartsWith('/')) { return "Image $Url is root-relative: %2F is a /. Write it relative to this page." }
+		# The site keeps a / at the end of the path, so it finds no file there.
+		if ($Path -match '(?:^|/)\.{0,2}\z') { return "Image $Url does not end in a file name. Give the path of the image file, such as Images/Shot.png." }
 		$Resolved = Resolve-DocsPath $Dir $Path
 		if ($Resolved.Up -gt 0 -or -not $Resolved.Path) { return "Image $Url is outside the docs folder ($($Manifest.base)). Move it in." }
+		# The site cannot load a page or docs.json as an image. A ! just before a link makes one an
+		# image, as in "Done![Next](Setup.md)".
+		$Extension = [regex]::Match($Resolved.Path, '\.[^./]*\z').Value.ToLowerInvariant()
+		if (-not (Test-NameIn $Extension $script:DocsImageTypes))
+		{
+			return "Image $Url is not an image file: an image must be a .png, .jpg, .jpeg, .webp, .gif or .svg file. A ! just before [ makes an image; for a link, drop the ! or put a space after it."
+		}
 		return Get-DocsFileProblem $BundleDir $Resolved.Path $Url 'Image'
 	}
 
@@ -2541,6 +2555,81 @@ function Format-ReferenceLabel([string]$Label)
 	return [regex]::Replace($Label, '[ \t\r\n]+', ' ').Trim(' ').ToLowerInvariant()
 }
 
+<#
+.SYNOPSIS
+A reference label folded loosely, so that labels the docs site matches always fold alike. Some it
+keeps apart fold alike too.
+
+.DESCRIPTION
+The site folds case as Unicode does. Windows PowerShell's casing misses the sharp s, the final
+sigma and Cherokee, so those are folded here by hand. Compatibility forms such as the long s, the
+micro sign and the fi ligature are decomposed, and marks and format characters such as the soft
+hyphen dropped.
+#>
+function Get-LooseReferenceLabel([string]$Label)
+{
+	# U+0345, the Greek iota below, folds to iota.
+	$Text = $Label.Normalize([Text.NormalizationForm]::FormKD).Replace([char]0x345, [char]0x3B9)
+	$Builder = New-Object System.Text.StringBuilder
+	foreach ($Char in $Text.ToCharArray())
+	{
+		$Category = [Globalization.CharUnicodeInfo]::GetUnicodeCategory($Char)
+		if ($Category -eq 'NonSpacingMark' -or $Category -eq 'EnclosingMark' -or $Category -eq 'Format') { continue }
+		[void]$Builder.Append($Char)
+	}
+	$Text = $Builder.ToString().ToUpperInvariant().ToLowerInvariant()
+	$Builder.Length = 0
+	foreach ($Char in $Text.ToCharArray())
+	{
+		$Code = [int]$Char
+		# Cherokee folds to its capitals.
+		if ($Code -ge 0x13F8 -and $Code -le 0x13FD) { [void]$Builder.Append([char]($Code - 8)) }
+		elseif ($Code -ge 0xAB70 -and $Code -le 0xABBF) { [void]$Builder.Append([char]($Code - 0xAB70 + 0x13A0)) }
+		elseif ($Code -eq 0xDF -or $Code -eq 0x1E9E) { [void]$Builder.Append('ss') }
+		elseif ($Code -eq 0x3C2) { [void]$Builder.Append([char]0x3C3) }
+		elseif ($Code -eq 0x131) { [void]$Builder.Append('i') }
+		else { [void]$Builder.Append($Char) }
+	}
+	return [regex]::Replace($Builder.ToString(), '\s+', ' ').Trim()
+}
+
+<#
+.SYNOPSIS
+A page's reference labels, to look up as the docs site may match them.
+
+.DESCRIPTION
+The site matches labels by Unicode case fold. Windows PowerShell has none: a hashtable compares by
+culture, which also skips soft hyphens and joiners, and ToLowerInvariant misses the sharp s. So a
+label matches strictly when it is the same once lowercased, as the site matches it too, and loosely
+when the site might match it.
+
+.PARAMETER Labels
+The labels, as Format-ReferenceLabel gives them.
+#>
+function New-ReferenceLabels([string[]]$Labels)
+{
+	$Set = [pscustomobject]@{
+		Strict = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+		Culture = @{}
+		Loose = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	}
+	foreach ($Label in $Labels)
+	{
+		[void]$Set.Strict.Add($Label)
+		$Set.Culture[$Label] = $true
+		[void]$Set.Loose.Add((Get-LooseReferenceLabel $Label))
+	}
+	return $Set
+}
+
+<# Whether a label, as Format-ReferenceLabel gives it, is surely defined, or with -Loose maybe. #>
+function Test-ReferenceLabel($Labels, [string]$Label, [switch]$Loose)
+{
+	if ($Labels.Strict.Contains($Label)) { return $true }
+	if (-not $Loose) { return $false }
+	return ($Labels.Culture.ContainsKey($Label) -or $Labels.Loose.Contains((Get-LooseReferenceLabel $Label)))
+}
+
 <# A link destination as CommonMark reads it: backslash escapes removed and entities such as &#46; decoded, in one pass. #>
 function ConvertFrom-MarkdownDestination([string]$Text)
 {
@@ -2549,7 +2638,32 @@ function ConvertFrom-MarkdownDestination([string]$Text)
 		if ($Match.Groups[1].Success) { return $Match.Groups[1].Value }
 		return [System.Net.WebUtility]::HtmlDecode($Match.Value)
 	}
-	return [regex]::Replace($Text, '\\([!-/:-@\[-`{-~])|&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});', $Evaluator)
+	return [regex]::Replace($Text, $script:MarkdownEscapePattern, $Evaluator)
+}
+
+<#
+.SYNOPSIS
+The first character reference in Markdown that this check cannot decode, or nothing.
+
+.DESCRIPTION
+On Windows PowerShell, WebUtility.HtmlDecode knows only the names of HTML 4, such as &amp; and
+&nbsp;. The docs site decodes every name of HTML5, such as &period; and &NonBreakingSpace;, so where
+this check would read the name as text, the site reads a character. One escaped as \& is text in
+both.
+#>
+function Find-UnknownEntity([string]$Text)
+{
+	foreach ($Match in [regex]::Matches($Text, $script:MarkdownEscapePattern))
+	{
+		if (-not $Match.Groups[1].Success -and [System.Net.WebUtility]::HtmlDecode($Match.Value) -ceq $Match.Value) { return $Match.Value }
+	}
+	return $null
+}
+
+<# Why a link or image with an entity this check cannot decode fails, after "Link" or "Image". #>
+function Get-EntityProblem([string]$Url, [string]$Entity)
+{
+	return " $Url has the entity $Entity, which this check cannot decode, so it cannot tell where it goes. Write the character itself, or a number such as &#46; for a dot."
 }
 
 <#
@@ -2574,22 +2688,32 @@ function ConvertFrom-UrlEscapes([string]$Text)
 <#
 .SYNOPSIS
 The text a heading shows, roughly as the site reads it: links give their text, images their alt
-text. Enough to tell an empty heading, such as "# [](Page.md)", from one with a title.
+text. Enough to tell an empty heading, such as "# [](Page.md)", from one with a title. Where the site
+may read less text, this reads less too: a reference it may take as a link shows only its text, and
+an entity this check cannot decode, such as &NonBreakingSpace;, is a space.
+
+.PARAMETER Labels
+The page's labels, from New-ReferenceLabels.
 #>
-function Get-MarkdownHeadingText([string]$Text, [hashtable]$Labels = @{})
+function Get-MarkdownHeadingText([string]$Text, $Labels = $null)
 {
+	if (-not $Labels) { $Labels = New-ReferenceLabels @() }
 	# Code spans and escaped characters show as text; mark them so brackets in them pair with nothing.
 	$Text = [regex]::Replace($Text, '(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)', { param($Match) if ($Match.Groups[2].Value -cnotmatch $script:JsBlankPattern) { 'x' } else { ' ' } })
 	$Text = [regex]::Replace($Text, '\\[!-/:-@\[-`{-~]', 'x')
-	$Text = [regex]::Replace($Text, '&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});', { param($Match) if ([System.Net.WebUtility]::HtmlDecode($Match.Value) -cnotmatch $script:JsBlankPattern) { 'x' } else { ' ' } })
+	$Text = [regex]::Replace($Text, '&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});', {
+		param($Match)
+		$Decoded = [System.Net.WebUtility]::HtmlDecode($Match.Value)
+		if ($Decoded -cne $Match.Value -and $Decoded -cnotmatch $script:JsBlankPattern) { 'x' } else { ' ' }
+	})
 	$Inline = '!?\[([^\[\]]*)\]\((?:[^()]|\([^()]*\))*\)'
-	$Reference = { param($Match) if ($Labels.ContainsKey((Format-ReferenceLabel $Match.Groups[2].Value))) { $Match.Groups[1].Value } else { $Match.Value } }
+	$Reference = { param($Match) if (Test-ReferenceLabel $Labels (Format-ReferenceLabel $Match.Groups[2].Value) -Loose) { $Match.Groups[1].Value } else { $Match.Value } }
 	do
 	{
 		$Before = $Text
 		$Text = [regex]::Replace($Text, $Inline, '$1')
 		$Text = [regex]::Replace($Text, '!?\[([^\[\]]*)\]\[([^\[\]]+)\]', $Reference)
-		$Text = [regex]::Replace($Text, '!?\[([^\[\]]+)\]\[\]', { param($Match) if ($Labels.ContainsKey((Format-ReferenceLabel $Match.Groups[1].Value))) { $Match.Groups[1].Value } else { $Match.Value } })
+		$Text = [regex]::Replace($Text, '!?\[([^\[\]]+)\]\[\]', { param($Match) if (Test-ReferenceLabel $Labels (Format-ReferenceLabel $Match.Groups[1].Value) -Loose) { $Match.Groups[1].Value } else { $Match.Value } })
 	} while ($Text -cne $Before)
 	return $Text
 }
@@ -2602,7 +2726,9 @@ The links, images and raw HTML in a run of Markdown lines, such as a paragraph.
 Read in one pass from left to right, as CommonMark does: whichever starts first of a code span, raw
 HTML or an autolink wins, and all three bind tighter than the brackets of a link. A link's
 destination is read where its ] is, so text after it cannot take it apart. A reference image,
-![alt][label] with label defined, comes back as an imageref with its label. A bare http(s) URL
+![alt][label] with label maybe defined, comes back as an imageref with its label. Raw HTML in an
+image's alt text comes back as althtml. A link or image whose destination holds an entity this
+check cannot decode has it as Entity. A bare http(s) URL
 comes back as a link, as GFM makes one of it, raw as written: it wins over code spans, escapes and
 brackets that start inside it, and ends at any Unicode space or <, less trailing punctuation and
 entities such as &amp;. A URL in a link's text is no link. After a [ still open, the site reads a
@@ -2613,18 +2739,20 @@ tabs and line breaks count as space, as in CommonMark.
 The lines, each with Line (its number in the file) and Text.
 
 .PARAMETER Labels
-The page's defined reference labels, normalized. [text][label] is a link only when label is one.
+The page's reference labels, from New-ReferenceLabels. [text][label] is a link only when label is
+surely one.
 
 .OUTPUTS
-Kind (link, image, imageref, looseurl or html), Value and Line.
+Kind (link, image, imageref, looseurl, html or althtml), Value, Line and Entity.
 #>
 function Get-DocsInlineItems
 {
 	param(
 		[Parameter(Mandatory)][object[]]$Lines,
-		[hashtable]$Labels = @{}
+		$Labels = $null
 	)
 
+	if (-not $Labels) { $Labels = New-ReferenceLabels @() }
 	$Starts = @()
 	$Text = ''
 	foreach ($Entry in $Lines)
@@ -2653,15 +2781,16 @@ function Get-DocsInlineItems
 	}
 	$Add = {
 		param([string]$Kind, [string]$Value, [int]$Offset)
-		$Item = [pscustomobject]@{ Kind = $Kind; Value = $Value; Line = (& $LineAt $Offset) }
+		$Item = [pscustomobject]@{ Kind = $Kind; Value = $Value; Line = (& $LineAt $Offset); Entity = $null }
 		$Items.Add($Item)
 		return $Item
 	}
 	# Whether the backslash at an offset escapes the character after it: ASCII punctuation.
 	$Escapes = { param([int]$At) return ($At + 1 -lt $Length -and $Punctuation.IndexOf($Text[$At + 1]) -ge 0) }
 
-	# Bare URLs, as GFM's literal autolinks: Item, and At, its offset.
+	# Bare URLs, as GFM's literal autolinks, and raw HTML: Item, and At, its offset.
 	$Bare = New-Object System.Collections.Generic.List[object]
+	$Html = New-Object System.Collections.Generic.List[object]
 	$Breaks = { param([int]$At) return ($At -ge $Length -or $script:UrlBreakPattern.IsMatch($Text, $At)) }
 	$IsLetter = { param([char]$C) $N = [int]$C; return (($N -ge 97 -and $N -le 122) -or ($N -ge 65 -and $N -le 90)) }
 	# Whether only trailing punctuation is left at an offset before a URL's end: such marks, entities
@@ -2803,7 +2932,7 @@ function Get-DocsInlineItems
 			# Raw HTML before autolinks, as the site's parser reads <!x@example.com>. An email
 			# autolink holds nothing the rules look at, so it is left as text.
 			$Match = $script:InlineHtmlPattern.Match($Text, $Index)
-			if ($Match.Success) { $null = & $Add 'html' $Match.Value $Index }
+			if ($Match.Success) { $Html.Add([pscustomobject]@{ At = $Index; Item = (& $Add 'html' $Match.Value $Index) }) }
 			else
 			{
 				$Match = $script:AutolinkPattern.Match($Text, $Index)
@@ -2889,8 +3018,9 @@ function Get-DocsInlineItems
 			}
 			if ($Ok -and $P -lt $Length -and $Text[$P] -eq ')')
 			{
-				$Destination = ConvertFrom-MarkdownDestination $Text.Substring($From, $To - $From)
-				$null = & $Add $Kind $Destination $Opener.At
+				$Destination = $Text.Substring($From, $To - $From)
+				$Item = & $Add $Kind (ConvertFrom-MarkdownDestination $Destination) $Opener.At
+				$Item.Entity = Find-UnknownEntity $Destination
 				& $Blank $Next ($P + 1)
 				$End = $P + 1
 			}
@@ -2916,14 +3046,23 @@ function Get-DocsInlineItems
 				if ($LabelEnd -gt $Next + 1) { $Label = $Text.Substring($Next + 1, $LabelEnd - $Next - 1) }
 				if ($LabelEnd -gt $Next) { $After = $LabelEnd + 1 }
 			}
-			if ($Labels.ContainsKey((Format-ReferenceLabel $Label)))
+			# A link only when the site surely reads one: if it does not, it may make a link of a URL
+			# in the text, or of an outer [. An image is a reference when the site may read one.
+			$Key = Format-ReferenceLabel $Label
+			if (Test-ReferenceLabel $Labels $Key)
 			{
 				if ($Opener.Image) { $null = & $Add 'imageref' $Label $Opener.At }
 				$End = $After
 			}
+			elseif ($Opener.Image -and (Test-ReferenceLabel $Labels $Key -Loose)) { $null = & $Add 'imageref' $Label $Opener.At }
 		}
 
 		if ($End -lt 0) { $Index++; continue }
+		# The site puts an image's alt text in its alt attribute as plain text, HTML and all.
+		if ($Opener.Image)
+		{
+			foreach ($Tag in $Html) { if ($Tag.At -gt $Opener.At -and $Tag.At -lt $Index) { $Tag.Item.Kind = 'althtml' } }
+		}
 		# GFM makes no link of a URL in a link's text or an image's alt text. A loose URL that took
 		# in a [ stays: the site pairs the brackets another way then.
 		foreach ($Url in @($Bare | Where-Object { $_.At -gt $Opener.At -and $_.At -lt $Index -and -not ($_.Item.Kind -eq 'looseurl' -and $_.Item.Value.Contains('[')) }))
@@ -2949,7 +3088,8 @@ function Get-DocsInlineItems
 Split the link reference definitions off the start of a paragraph, as CommonMark reads them.
 
 .OUTPUTS
-Definitions (Label, Url and Line) and Rest, the paragraph's other lines.
+Definitions (Label, Url, Line, and Entity: one Url holds that this check cannot decode) and Rest,
+the paragraph's other lines.
 #>
 function Split-MarkdownDefinitions([object[]]$Lines)
 {
@@ -2963,8 +3103,8 @@ function Split-MarkdownDefinitions([object[]]$Lines)
 		# [^1]: is a footnote, and a label needs more than spaces.
 		$Label = $Match.Groups[1].Value
 		if (-not $Label.Trim([char[]]" `t`n") -or $Label.StartsWith('^')) { break }
-		$Url = ConvertFrom-MarkdownDestination ($Match.Groups[2].Value + $Match.Groups[3].Value)
-		$Definitions.Add([pscustomobject]@{ Label = (Format-ReferenceLabel $Label); Url = $Url; Line = $Lines[$Index].Line })
+		$Destination = $Match.Groups[2].Value + $Match.Groups[3].Value
+		$Definitions.Add([pscustomobject]@{ Label = (Format-ReferenceLabel $Label); Url = (ConvertFrom-MarkdownDestination $Destination); Line = $Lines[$Index].Line; Entity = (Find-UnknownEntity $Destination) })
 		$Index += $Match.Value.Split("`n").Count
 	}
 	$Rest = @()
@@ -3042,7 +3182,8 @@ paragraph carries on lazily past the end of its container, and fenced code ends 
 indented at most three spaces in its container. A GFM table runs from its header row to a blank
 line or another block, and a --- or === in it is never an underline. Then the links, images and raw
 HTML of each paragraph and table cell, once every reference definition is known. The website parses each page with a full CommonMark
-parser when it builds and checks the rules again.
+parser when it builds and checks the rules again. Before any of that, it takes a first line that
+starts with --- or +++ for front matter, so this does too.
 
 .PARAMETER Path
 The page's path in the bundle, '/'-separated.
@@ -3098,6 +3239,14 @@ function Test-DocsMarkdown
 	$Interrupts = {
 		param([string]$Body)
 		return ($Body -match '^#{1,6}(?:[ \t]|$)' -or $Body -match $FencePattern -or $Body -match $BreakPattern -or $null -ne (Get-HtmlBlockEnd $Body $true))
+	}
+
+	# The site fails a page whose first line that is not blank starts with --- or +++, even as the
+	# text of an underlined H1, as Astro would read front matter there.
+	$FrontMatter = [regex]::Match(($Text -replace '\A\uFEFF', ''), $script:FrontMatterPattern)
+	if ($FrontMatter.Success)
+	{
+		& $Problem ($FrontMatter.Value.Split("`n").Count) 'Front matter is not allowed: the docs site rejects a page whose first line that is not blank starts with --- or +++, and KhaosDocs shows front matter as text. Start the page with "# Title".'
 	}
 
 	# The first line that is not blank: whatever is on it, the H1 has to be.
@@ -3323,8 +3472,7 @@ function Test-DocsMarkdown
 	}
 	& $CloseLeaf
 
-	$Labels = @{}
-	foreach ($Definition in $Definitions) { $Labels[$Definition.Label] = $true }
+	$Labels = New-ReferenceLabels @($Definitions | ForEach-Object { $_.Label })
 
 	# Rules 1 and 2: one H1, first and on its own, and no skipped levels. Like the site, an H1 does
 	# not reset the level, so an H3 straight after it is a skip.
@@ -3336,9 +3484,14 @@ function Test-DocsMarkdown
 	else
 	{
 		if ($H1[0].Nested) { & $Problem $H1[0].Line 'The H1 is inside a quote, list item or footnote. Start the page with a plain "# Title"; it is the page title.' }
-		elseif ($First -ne $H1[0].Line) { & $Problem $First "Content before the H1 on line $($H1[0].Line). The H1 is the page title and must come first." }
+		elseif ($First -ne $H1[0].Line -and -not $FrontMatter.Success) { & $Problem $First "Content before the H1 on line $($H1[0].Line). The H1 is the page title and must come first." }
 		# Blank as the site's JavaScript trims it: U+FEFF is a space there, U+0085 is not.
-		if ((Get-MarkdownHeadingText $H1[0].Text $Labels) -cmatch $script:JsBlankPattern) { & $Problem $H1[0].Line 'The H1 is empty; it is the page title.' }
+		if ((Get-MarkdownHeadingText $H1[0].Text $Labels) -cmatch $script:JsBlankPattern)
+		{
+			$Entity = Find-UnknownEntity $H1[0].Text
+			if ($Entity) { & $Problem $H1[0].Line "The H1 may be empty: this check cannot decode $Entity, which the docs site may read as a space. Write the character itself; the H1 is the page title." }
+			else { & $Problem $H1[0].Line 'The H1 is empty; it is the page title.' }
+		}
 		foreach ($Extra in @($H1 | Select-Object -Skip 1)) { & $Problem $Extra.Line 'More than one H1. The first is the page title; use ## for sections.' }
 	}
 	$Last = 1
@@ -3363,6 +3516,11 @@ function Test-DocsMarkdown
 			& $Problem $Item.Line "Raw HTML is not allowed: $($Item.Value). KhaosDocs shows it as text and the docs site rejects it. Use Markdown, or put it in backticks."
 			continue
 		}
+		if ($Item.Kind -eq 'althtml')
+		{
+			& $Problem $Item.Line "Raw HTML is not allowed, even in an image's alt text: $($Item.Value). KhaosDocs shows it as text. Write the alt text as plain text."
+			continue
+		}
 		if ($Item.Kind -eq 'looseurl')
 		{
 			if (Get-DocsSiteUrl $Item.Value) { & $Problem $Item.Line "Link $($Item.Value) comes after a [ that is still open, where the docs site reads a bare URL another way. Write it as <$($Item.Value)>, or close the [ first." }
@@ -3373,12 +3531,24 @@ function Test-DocsMarkdown
 			& $Problem $Item.Line "Image ![...][$($Item.Value)] is a reference. Write images as ![alt](path); the docs site rejects reference images too."
 			continue
 		}
+		$What = 'Link'
+		if ($Item.Kind -eq 'image') { $What = 'Image' }
+		if ($Item.Entity)
+		{
+			& $Problem $Item.Line ($What + (Get-EntityProblem $Item.Value $Item.Entity))
+			continue
+		}
 		$Message = Get-DocsLinkProblem -Url $Item.Value -Image ($Item.Kind -eq 'image') -Dir $Dir -BundleDir $BundleDir -Manifest $Manifest
 		if ($Message) { & $Problem $Item.Line $Message }
 	}
 	# As links, as the site checks them, even those an image uses.
 	foreach ($Definition in $Definitions)
 	{
+		if ($Definition.Entity)
+		{
+			& $Problem $Definition.Line ('Link' + (Get-EntityProblem $Definition.Url $Definition.Entity))
+			continue
+		}
 		$Message = Get-DocsLinkProblem -Url $Definition.Url -Dir $Dir -BundleDir $BundleDir -Manifest $Manifest
 		if ($Message) { & $Problem $Definition.Line $Message }
 	}

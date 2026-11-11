@@ -974,8 +974,15 @@ try
 		@{ Name = 'a remote image inside a link'; Text = "# Title`n`n[![b](https://example.com/b.svg)](https://example.com)`n"; Line = 3; Expect = 'loads no remote images' }
 		@{ Name = 'a remote image whose alt text holds a link'; Text = "# Title`n`n![a [b](Sample.md) c](https://example.com/x.png)`n"; Line = 3; Expect = 'loads no remote images' }
 		@{ Name = 'a missing image whose alt text holds a link'; Text = "# Title`n`n![a [b](Sample.md) c](Images/missing.png)`n"; Line = 3; Expect = 'is broken' }
-		@{ Name = 'an image that is a folder'; Text = "# Title`n`n![a](Images)`n"; Line = 3; Expect = 'Image Images is broken' }
-		@{ Name = 'an image that is a folder, with a slash'; Text = "# Title`n`n![a](Images/)`n"; Line = 3; Expect = 'Image Images/ is broken' }
+		@{ Name = 'an image that is a folder'; Text = "# Title`n`n![a](Images)`n"; Line = 3; Expect = 'Image Images is not an image file' }
+		@{ Name = 'an image that is a folder, with a slash'; Text = "# Title`n`n![a](Images/)`n"; Line = 3; Expect = 'Image Images/ does not end in a file name' }
+		# The site cannot load a page or docs.json as an image, and keeps a / at the end of a path.
+		@{ Name = 'a link after a word and a !, which makes it an image of a page'; Text = "# Title`n`nDone![Next: set up](Guides/Setup.md)`n"; Line = 3; Expect = 'Image Guides/Setup.md is not an image file: an image must be a .png, .jpg, .jpeg, .webp, .gif or .svg file. A ! just before [ makes an image; for a link, drop the ! or put a space after it.' }
+		@{ Name = 'an image of a page'; Text = "# Title`n`n![x](Sample.md)`n"; Line = 3; Expect = 'Image Sample.md is not an image file' }
+		@{ Name = 'an image of docs.json'; Text = "# Title`n`n![x](docs.json)`n"; Line = 3; Expect = 'Image docs.json is not an image file' }
+		@{ Name = 'an image path that ends in /'; Text = "# Title`n`n![x](Images/Shot.png/)`n"; Line = 3; Expect = 'Image Images/Shot.png/ does not end in a file name' }
+		@{ Name = 'an image path that ends in %2F'; Text = "# Title`n`n![x](Images/Shot.png%2F)`n"; Line = 3; Expect = 'does not end in a file name' }
+		@{ Name = 'an image path that ends in /.'; Text = "# Title`n`n![x](Images/Shot.png/.)`n"; Line = 3; Expect = 'does not end in a file name' }
 		@{ Name = 'a root-relative image'; Text = "# Title`n`n![Shot](/Images/Shot.png)`n"; Line = 3; Expect = 'is root-relative. Write it relative to this page.' }
 		# An annotation writes % as %25.
 		@{ Name = 'an image that is root-relative once decoded'; Text = "# Title`n`n![Shot](%2FImages/Shot.png)`n"; Line = 3; Expect = 'Image %252FImages/Shot.png is root-relative: %252F is a /. Write it relative to this page.' }
@@ -992,7 +999,7 @@ try
 		@{ Name = 'a link to an image with the wrong case'; Text = "# Title`n`nSee [it](images/shot.png).`n"; Line = 3; Expect = 'wrong case: the file is Images/Shot.png' }
 		@{ Name = 'an image with a query'; Text = "# Title`n`n![Shot](Images/Shot.png?v=2)`n"; Line = 3; Expect = 'has a ? or #' }
 		@{ Name = 'an image with a fragment'; Text = "# Title`n`n![Shot](Images/Shot.png#gh-dark-mode-only)`n"; Line = 3; Expect = 'has a ? or #' }
-		@{ Name = 'a full link to a page these docs do not have'; Text = "# Title`n`nSee [it](https://docs.khaos.systems/unreal/sample-docs/nope/).`n"; Line = 3; Expect = 'these docs have no page there' }
+		@{ Name = 'a full link to a page these docs do not have'; Text = "# Title`n`nSee [it](https://docs.khaos.systems/unreal/sample-docs/nope/).`n"; Line = 3; Expect = "Link https://docs.khaos.systems/unreal/sample-docs/nope/ is broken: these docs have no page there. Link the page's .md file instead." }
 		@{ Name = "a full link to a page this version's docs do not have"; Text = "# Title`n`nSee [it](https://docs.khaos.systems/unreal/sample-docs/v1.2.3/nope/).`n"; Line = 3; Expect = 'these docs have no page there' }
 		@{ Name = 'a full link to an image, which the site keeps elsewhere'; Text = "# Title`n`nSee [it](http://Docs.Khaos.Systems/unreal/sample-docs/Images/Shot.png).`n"; Line = 3; Expect = 'these docs have no page there' }
 		@{ Name = 'a URL in the text to a page these docs do not have'; Text = "# Title`n`nSee https://docs.khaos.systems/unreal/sample-docs/guides/nope/.`n"; Line = 3; Expect = 'these docs have no page there' }
@@ -1014,6 +1021,25 @@ try
 		@{ Name = 'a link whose target holds a no-break space'; Text = "# Title`n`nSee [it](Miss$([char]0xA0)ing.md).`n"; Line = 3; Expect = 'is broken' }
 		@{ Name = 'an image whose path holds an ideographic space'; Text = "# Title`n`n![it](Images/Sh$([char]0x3000)ot.png)`n"; Line = 3; Expect = 'is broken' }
 		@{ Name = 'a link after a line of only a no-break space, which carries on the paragraph'; Text = "# Title`n`nText`n$([char]0xA0)`n    [it](Missing.md)`n"; Line = 5; Expect = 'is broken' }
+		# Windows PowerShell decodes only HTML 4's entity names; the site decodes HTML5's too.
+		@{ Name = 'a link whose target has an HTML5 entity'; Text = "# Title`n`nSee [it](Missing&period;md).`n"; Line = 3; Expect = 'Link Missing&period;md has the entity &period;, which this check cannot decode' }
+		@{ Name = 'a definition whose target has an HTML5 entity'; Text = "# Title`n`nSee [it][r].`n`n[r]: Missing&period;md`n"; Line = 5; Expect = 'Link Missing&period;md has the entity &period;' }
+		@{ Name = 'a link of another scheme, spelled with an HTML5 entity'; Text = "# Title`n`nSee [x](javascript&colon;alert(1)).`n"; Line = 3; Expect = 'has the entity &colon;' }
+		@{ Name = 'an image whose path has an HTML5 entity'; Text = "# Title`n`n![x](Images&sol;Shot.png)`n"; Line = 3; Expect = 'Image Images&sol;Shot.png has the entity &sol;' }
+		@{ Name = 'an H1 of an HTML5 entity for a space'; Text = "# &NonBreakingSpace;`n`nText.`n"; Line = 1; Expect = 'The H1 may be empty: this check cannot decode &NonBreakingSpace;' }
+		# The site folds reference labels as Unicode does; Windows PowerShell compares them by culture.
+		@{ Name = 'a docs URL as the text of a reference the site does not match: a soft hyphen'; Text = "# Title`n`nSee [https://docs.khaos.systems/unreal/sample-docs/nope/][a$([char]0xAD)b].`n`n[ab]: Sample.md`n"; Line = 3; Expect = 'comes after a [ that is still open' }
+		@{ Name = 'an outer link around a reference the site does not match: a joiner'; Text = "# Title`n`n[See [it][a$([char]0x200D)b]](Missing.md)`n`n[ab]: Sample.md`n"; Line = 3; Expect = 'Link Missing.md is broken' }
+		@{ Name = 'an image by reference to a label the site folds: a long s'; Text = "# Title`n`n![Shot][$([char]0x17F)]`n`n[s]: Images/Shot.png`n"; Line = 3; Expect = 'Write images as ![alt](path)' }
+		@{ Name = 'an image by reference to a label the site folds: a micro sign'; Text = "# Title`n`n![Shot][$([char]0xB5)s]`n`n[$([char]0x3BC)s]: Images/Shot.png`n"; Line = 3; Expect = 'Write images as ![alt](path)' }
+		# The site takes a first line that starts with --- or +++ for front matter, even as an H1.
+		@{ Name = 'front matter'; Text = "---`ntitle: Title`n---`n`n# Title`n"; Line = 1; Expect = 'Front matter is not allowed: the docs site rejects a page whose first line that is not blank starts with --- or +++' }
+		@{ Name = 'an underlined H1 that starts with ---'; Text = "--- Title ---`n===`n`nText.`n"; Line = 1; Expect = 'Front matter is not allowed' }
+		@{ Name = 'an underlined H1 that starts with +++'; Text = "+++ Title`n===`n`nText.`n"; Line = 1; Expect = 'Front matter is not allowed' }
+		@{ Name = 'an underlined H1 that starts with ---, after a line of a no-break space'; Text = "$([char]0xA0)`n--- Title`n===`n"; Line = 2; Expect = 'Front matter is not allowed' }
+		# The site renders alt text as plain text, so only KhaosDocs shows HTML there.
+		@{ Name = "raw HTML in an image's alt text"; Text = "# Title`n`n![<b>x</b>](Images/Shot.png)`n"; Line = 3; Expect = "Raw HTML is not allowed, even in an image's alt text: <b>. KhaosDocs shows it as text. Write the alt text as plain text." }
+		@{ Name = "raw HTML in a link's text"; Text = "# Title`n`n[<b>x</b>](Sample.md)`n"; Line = 3; Expect = 'Raw HTML is not allowed: <b>. KhaosDocs shows it as text and the docs site rejects it.' }
 	)
 	foreach ($Rule in $Rules)
 	{
@@ -1067,6 +1093,10 @@ try
 			'and a URL in parentheses (see https://docs.khaos.systems/unreal/sample-docs/guides/setup/).'
 		) -join "`n") }
 		@{ Name = 'a line of only a no-break space between a paragraph and indented code'; Text = "# Title`n`nText`n$([char]0xA0)`n    [it](Sample.md)`n" }
+		@{ Name = 'a link after a ! and a space'; Text = "# Title`n`nDone! [Next: set up](Guides/Setup.md)`n" }
+		@{ Name = 'a link target with an escaped &, which starts no entity'; Text = "# Title`n`nSee [it](../Source/A\&period;h).`n" }
+		@{ Name = 'an H1 with an HTML5 entity between words'; Text = "# Tom &rightarrow; Jerry`n`nText.`n" }
+		@{ Name = 'a docs URL as the text of a reference whose label differs only in case'; Text = "# Title`n`nSee [https://docs.khaos.systems/unreal/sample-docs/nope/][Ab].`n`n[ab]: Sample.md`n" }
 	)
 	foreach ($Case in $Valid)
 	{
@@ -1088,6 +1118,25 @@ try
 	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
 	Remove-Item "$($Bundle.Dir)\Bad.md"
 	Check 'a public repository may link its other files' ($Annotations.Count -eq 0) ($Annotations -join "`n")
+
+	# Reference labels the site's parser matches, and some it keeps apart (checked against it).
+	$Folded = @(
+		@("Stra$([char]0xDF)e", 'STRASSE'), @([string][char]0x1E9E, 'ss'), @("$([char]0x3C3)$([char]0x3C2)", "$([char]0x3A3)$([char]0x3A3)"), @([string][char]0x17F, 's'),
+		@([string][char]0xB5, [string][char]0x3BC), @([string][char]0x212A, 'k'), @([string][char]0xFB01, 'fi'), @([string][char]0x1FB3, "$([char]0x3B1)$([char]0x3B9)"),
+		@([string][char]0x13F8, [string][char]0x13F0), @([string][char]0x587, "$([char]0x565)$([char]0x582)"), @([string][char]0x130, "i$([char]0x307)"), @('Docs Link', "docs`tlink")
+	)
+	foreach ($Pair in $Folded)
+	{
+		$Defined = New-ReferenceLabels @((Format-ReferenceLabel $Pair[1]))
+		Check "a reference to label '$($Pair[0])' may be one to '$($Pair[1])'" (Test-ReferenceLabel $Defined (Format-ReferenceLabel $Pair[0]) -Loose)
+	}
+	$Apart = @(@("a$([char]0xAD)b", 'ab'), @("a$([char]0x200D)b", 'ab'), @("a$([char]0xFEFF)b", 'ab'), @("Cafe$([char]0x301)", "Caf$([char]0xE9)"), @([string][char]0x133, 'ij'), @([string][char]0x131, 'I'), @([string][char]0xFF41, 'a'), @('a-b', 'ab'))
+	foreach ($Pair in $Apart)
+	{
+		$Defined = New-ReferenceLabels @((Format-ReferenceLabel $Pair[1]))
+		Check "a reference to label '$($Pair[0])' is not surely one to '$($Pair[1])'" (-not (Test-ReferenceLabel $Defined (Format-ReferenceLabel $Pair[0])))
+	}
+	Check 'a reference to a label in another case surely is one' (Test-ReferenceLabel (New-ReferenceLabels @((Format-ReferenceLabel 'docs link'))) (Format-ReferenceLabel "Docs`n  Link"))
 
 	New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`nSee [it](Missing.md).`n"
 	$script:Result = $null
@@ -1178,6 +1227,7 @@ try
 		@{ Name = 'a landing page that is a folder'; Add = { Remove-Item "$($Bundle.Dir)\Sample.md"; New-TestFile "$($Bundle.Dir)\Sample.md\Page.md" "# Page`n" }; Expect = 'The landing page Docs/Sample.md is missing' }
 		# PowerShell's -ceq takes each of these pairs for the same name; git and the site do not.
 		@{ Name = 'a link to a sharp s, beside a file spelled ss'; Add = { New-TestFile "$($Bundle.Dir)\Strasse.md" "# Strasse`n"; New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`nSee [it](Stra$([char]0xDF)e.md).`n" }; Expect = "line=3,title=Docs::Link Stra$([char]0xDF)e.md is broken" }
+		@{ Name = 'an image that is a folder named like one'; Add = { New-TestPng "$($Bundle.Dir)\Dir.png\A.png"; New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`n![a](Dir.png)`n" }; Expect = 'line=3,title=Docs::Image Dir.png is broken' }
 		@{ Name = 'a link to a composed accent, beside a file with a combining one'; Add = { New-TestFile "$($Bundle.Dir)\Cafe$([char]0x301).md" "# Cafe`n"; New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`nSee [it](Caf$([char]0xE9).md).`n" }; Expect = "line=3,title=Docs::Link Caf$([char]0xE9).md is broken" }
 		@{ Name = 'an image with a soft hyphen in its name'; Add = { New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`n![it](Images/Sh$([char]0xAD)ot.png)`n" }; Expect = "line=3,title=Docs::Image Images/Sh$([char]0xAD)ot.png is broken" }
 		@{ Name = 'a file type a bundle cannot hold'; Add = { New-TestFile "$($Bundle.Dir)\notes.txt" 'x' }; Expect = 'file=Docs/notes.txt,title=Docs::Only .md pages' }
