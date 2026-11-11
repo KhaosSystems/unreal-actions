@@ -2469,6 +2469,8 @@ function Get-DocsLinkProblem
 		if ($Url -match '[?#]') { return "Image $Url has a ? or #. The docs site reads the whole path as the file name; drop the part from the ? or #." }
 		$Path = ConvertFrom-UrlEscapes $Url
 		if ($null -eq $Path) { return "Image $Url is not a valid link: each % must start a UTF-8 escape, such as %20. Write a plain % as %25." }
+		# The site reads the path decoded, so %2F at its start is a / there too.
+		if ($Path.StartsWith('/')) { return "Image $Url is root-relative: %2F is a /. Write it relative to this page." }
 		$Resolved = Resolve-DocsPath $Dir $Path
 		if ($Resolved.Up -gt 0 -or -not $Resolved.Path) { return "Image $Url is outside the docs folder ($($Manifest.base)). Move it in." }
 		return Get-DocsFileProblem $BundleDir $Resolved.Path $Url 'Image'
@@ -3675,6 +3677,9 @@ function Test-DocsBundle
 		if ($File -match '[#?]') { & $Fail 'Rename it: the docs site takes no "#" or "?" in a file or folder name.' $Shown }
 		$Extension = [IO.Path]::GetExtension($File)
 		$IsImage = Test-NameIn $Extension.ToLowerInvariant() $script:DocsImageTypes
+		# The site loses an image with ` in its path: the page gets an <img> with no src, and the build
+		# fails. Pages and their folders may hold one.
+		if ($IsImage -and $File.IndexOf('`') -ge 0) { & $Fail 'Rename it: the docs site takes no "`" in the name of an image or of a folder an image is in.' $Shown }
 		if (Test-SameName $Extension '.md') { $Pages.Add($File) }
 		elseif (Test-SameName $Extension '.md' -IgnoreCase)
 		{

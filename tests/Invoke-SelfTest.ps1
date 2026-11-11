@@ -977,6 +977,9 @@ try
 		@{ Name = 'an image that is a folder'; Text = "# Title`n`n![a](Images)`n"; Line = 3; Expect = 'Image Images is broken' }
 		@{ Name = 'an image that is a folder, with a slash'; Text = "# Title`n`n![a](Images/)`n"; Line = 3; Expect = 'Image Images/ is broken' }
 		@{ Name = 'a root-relative image'; Text = "# Title`n`n![Shot](/Images/Shot.png)`n"; Line = 3; Expect = 'is root-relative. Write it relative to this page.' }
+		# An annotation writes % as %25.
+		@{ Name = 'an image that is root-relative once decoded'; Text = "# Title`n`n![Shot](%2FImages/Shot.png)`n"; Line = 3; Expect = 'Image %252FImages/Shot.png is root-relative: %252F is a /. Write it relative to this page.' }
+		@{ Name = 'an image that starts with two escaped slashes'; Text = "# Title`n`n![x](%2f%2fexample.com/x.png)`n"; Line = 3; Expect = 'Image %252f%252fexample.com/x.png is root-relative' }
 		@{ Name = 'an image outside the bundle'; Text = "# Title`n`n![Icon](../Resources/Icon128.png)`n"; Line = 3; Expect = 'outside the docs folder' }
 		@{ Name = 'an image one folder above the bundle'; Text = "# Title`n`n![Icon](../Icon.png)`n"; Line = 3; Expect = 'outside the docs folder' }
 		@{ Name = 'a missing image'; Text = "# Title`n`n![Shot](Images/None.png)`n"; Line = 3; Expect = 'is broken' }
@@ -1035,6 +1038,7 @@ try
 		@{ Name = 'an H1 of an image with alt text'; Text = "# ![Logo](Images/Shot.png)`n`nText.`n" }
 		@{ Name = 'an H1 with closing #s'; Text = "# Title ##`n" }
 		@{ Name = 'a page and an image with spaces in their names, linked with %20'; Text = "# Title`n`nSee [it](First%20Steps.md) and ![it](Images/My%20Shot.png).`n"; Files = @('First Steps.md', 'Images/My Shot.png') }
+		@{ Name = 'an image named %2F%2Fx.png, which is / only once decoded twice'; Text = "# Title`n`n![Slashes](%252F%252Fx.png)`n"; Files = @('%2F%2Fx.png') }
 		@{ Name = 'a page link spelled with an entity, in a private repository'; Text = "# Title`n`nSee [it](Guides/Setup&#46;md).`n"; Private = $true }
 		@{ Name = 'a list number in another script'; Text = "# Title`n`nSteps:`n$([char]0xFF11). Enable the plugin.`n" }
 		@{ Name = 'brackets after a ! that are no image'; Text = "# Title`n`nWow![not a reference] here.`n" }
@@ -1203,6 +1207,43 @@ try
 	$Annotations = Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir }
 	Remove-Item "$($Bundle.Dir)\Images\Exact.png"
 	Check 'an image of exactly 5 MB passes' ($Annotations.Count -eq 0) ($Annotations -join "`n")
+
+	# The site loses an image with ` in its path and fails its build; pages and their folders may
+	# hold one. These are made with .NET, as cmdlets read ` in a path as an escape.
+	$Shot = [IO.File]::ReadAllBytes((Join-Paths $Bundle.Dir 'Images' 'Shot.png'))
+	$Ticked = @(
+		@{ Name = 'an image with ` in its name'; File = 'Images/Tab `1`.png'; Link = 'Images/Tab%20%601%60.png' }
+		@{ Name = 'an image in a folder with ` in its name'; File = 'Shots `1`/Tab.png'; Link = 'Shots%20%601%60/Tab.png'; Folder = 'Shots `1`' }
+	)
+	foreach ($Case in $Ticked)
+	{
+		$Full = Join-Paths $Bundle.Dir $Case.File
+		[void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Full))
+		[IO.File]::WriteAllBytes($Full, $Shot)
+		New-TestFile "$($Bundle.Dir)\Bad.md" "# Title`n`n![Tab]($($Case.Link))`n"
+		$Annotations = @(Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir })
+		[IO.File]::Delete($Full)
+		if ($Case.Folder) { [IO.Directory]::Delete((Join-Paths $Bundle.Dir $Case.Folder)) }
+		Remove-Item "$($Bundle.Dir)\Bad.md"
+		$Expect = '::error file=Docs/' + $Case.File + ',title=Docs::Rename it: the docs site takes no "`" in the name of an image or of a folder an image is in.'
+		Check "reports $($Case.Name)" ($Annotations.Count -eq 1 -and $Annotations[0] -ceq $Expect) ($Annotations -join "`n")
+	}
+	$TickPages = @(
+		@{ File = 'Press `~`.md'; Text = (@('# Press the console key', '', 'Text.', '') -join "`n") }
+		@{ File = 'Keys `x`/Console.md'; Text = (@('# Console', '', 'See [the key](<../Press `~`.md>).', '') -join "`n") }
+		@{ File = 'Good.md'; Text = (@('# Title', '', 'See [the key](<Press `~`.md>) and [the console](Keys%20%60x%60/Console.md).', '') -join "`n") }
+	)
+	foreach ($Page in $TickPages)
+	{
+		$Full = Join-Paths $Bundle.Dir $Page.File
+		[void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Full))
+		[IO.File]::WriteAllText($Full, $Page.Text)
+	}
+	$Annotations = @(Get-Annotations { $null = Test-DocsBundle -BundleDir $Bundle.Dir })
+	foreach ($Page in $TickPages) { [IO.File]::Delete((Join-Paths $Bundle.Dir $Page.File)) }
+	[IO.Directory]::Delete((Join-Paths $Bundle.Dir 'Keys `x`'))
+	Check 'pages and folders of pages with ` in their names pass, linked as the site links them' ($Annotations.Count -eq 0) ($Annotations -join "`n")
+	Check 'and get the URLs the site gives them' ((Get-DocsPagePath 'Press `~`.md' 'Sample.md').Path -ceq 'press/' -and (Get-DocsPagePath 'Keys `x`/Console.md' 'Sample.md').Path -ceq 'keys-x/console/')
 
 	# Images the site reads, whatever their extension: by the bytes they start with, and SVGs by their size.
 	$Readable = @{
