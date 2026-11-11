@@ -3,7 +3,7 @@
 #
 #   commits  GitHub-hosted. Pull requests and pushes: every commit message is a conventional commit.
 #   package  GitHub-hosted. Fab checks, then the source zip Fab is given, per engine version. Also
-#            checks Content/Docs against the docs site's rules.
+#            checks the Docs folder against the docs site's rules.
 #   build    Build machine. BuildPlugin on that zip, then the automation tests on the result.
 #   release  Once every engine passed, for a run with release set (the next version comes from the
 #            commit messages) or a pushed vX.Y.Z tag: GitHub release and tag, release branch, Fab
@@ -44,7 +44,7 @@ on:
         type: boolean
         default: false
       publish-docs:
-        description: Publish Content/Docs to docs.khaos.systems with each release, and fail any run whose docs break the site's rules. Needs docs-token.
+        description: Publish the Docs folder beside the .uplugin to docs.khaos.systems with each release, and fail any run whose docs break the site's rules. Needs docs-token.
         type: boolean
         default: false
       vendor-to:

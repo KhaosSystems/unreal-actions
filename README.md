@@ -64,7 +64,7 @@ the Fab publisher portal. Pushing a `vX.Y.Z` tag yourself still works too.
 | [`plugin/build`](plugin/build/action.yml) | BuildPlugin on that zip against a Launcher-installed engine, plus a strict-includes pass. |
 | [`plugin/test`](plugin/test/action.yml) | The plugin's automation tests in a headless editor. |
 | [`plugin/release`](plugin/release/action.yml) | GitHub release, the `release` branch games follow, and the Fab checklist. |
-| [`plugin/docs`](plugin/docs/action.yml) | Builds `Content/Docs` into a docs bundle and checks it; for a release, zips it. |
+| [`plugin/docs`](plugin/docs/action.yml) | Builds `Docs` into a docs bundle and checks it; for a release, zips it. |
 | [`plugin/publish-docs`](plugin/publish-docs/action.yml) | Pushes a docs bundle to `KhaosSystems/docs-content`, which deploys the docs site. |
 | [`plugin/badges`](plugin/badges/action.yml) | Tests, engine versions and lines of code, for the README. Public repositories only. |
 | [`commits/check`](commits/check/action.yml) | Fails when a commit message is not a conventional commit. |
@@ -76,7 +76,19 @@ the Fab publisher portal. Pushing a `vX.Y.Z` tag yourself still works too.
 
 ### Docs
 
-With `publish-docs`, each release also publishes the plugin's `Content/Docs` to
+A plugin's docs live in `Docs/`, beside the `.uplugin`. `Config/FilterPlugin.ini` must list them:
+
+```ini
+[FilterPlugin]
+/Docs/...
+```
+
+Khaos Docs shows `Docs/` in its documentation window, so buyers need it too. BuildPlugin, which
+builds what Fab buyers download, ships it only when `FilterPlugin.ini` lists it, so packaging fails
+without that line. Docs left in `Content/Docs` are no longer read; CI says to move them. A plugin
+left with no `Content/` still packages: Fab requires the folder, so the zip gets an empty one.
+
+With `publish-docs`, each release also publishes `Docs/` to
 [docs.khaos.systems](https://docs.khaos.systems):
 
 ```yaml
