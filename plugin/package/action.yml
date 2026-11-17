@@ -22,6 +22,9 @@ outputs:
   version:
     description: Version written into the zips.
     value: ${{ steps.package.outputs.version }}
+  mac:
+    description: "'true' when a module's PlatformAllowList and PlatformDenyList let it build for Mac, so Fab builds it there."
+    value: ${{ steps.package.outputs.mac }}
 
 runs:
   using: composite

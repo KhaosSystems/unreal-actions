@@ -121,3 +121,5 @@ Add-CiSummary ($Summary -join "`n")
 
 Set-CiOutput 'plugin' $Descriptor.Name
 Set-CiOutput 'version' $VersionName
+# Fab builds for every platform a module allows; CI builds on a Mac only when one allows it.
+Set-CiOutput 'mac' ([string](Test-PluginAllowsPlatform $Descriptor 'Mac')).ToLowerInvariant()

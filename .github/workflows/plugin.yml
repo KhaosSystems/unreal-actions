@@ -4,10 +4,13 @@
 #   commits  GitHub-hosted. Pull requests and pushes: every commit message is a conventional commit.
 #   package  GitHub-hosted. Fab checks, then the source zip Fab is given, per engine version. Also
 #            checks the Docs folder against the docs site's rules.
-#   build    Build machine. BuildPlugin on that zip, then the automation tests on the result.
-#   release  Once every engine passed, for a run with release set (the next version comes from the
-#            commit messages) or a pushed vX.Y.Z tag: GitHub release and tag, release branch, Fab
-#            checklist. With publish-docs, the docs bundle is zipped onto the release.
+#   build    Windows build machine. BuildPlugin on that zip, then the automation tests on the result.
+#   mac      Mac build machine, when a module allows Mac: BuildPlugin on the same zip, as Fab's Mac
+#            build does. Any compiler warning in the plugin's own sources fails either build.
+#   release  Once every engine passed on both machines, for a run with release set (the next
+#            version comes from the commit messages) or a pushed vX.Y.Z tag: GitHub release and tag,
+#            release branch, Fab checklist. With publish-docs, the docs bundle is zipped onto the
+#            release.
 #   docs     With publish-docs, after the release: pushes that bundle to docs.khaos.systems.
 #   badges   On the default branch of a public repository: tests, engines and lines of code.
 #   notify   Optional Discord message for releases and failures.
@@ -39,6 +42,14 @@ on:
         description: JSON array of labels for the build machine, which has the engines installed from the Epic Games Launcher.
         type: string
         default: '["self-hosted", "Windows", "unreal"]'
+      mac-build-runner:
+        description: JSON array of labels for the Mac build machine, which has the engines installed from the Epic Games Launcher, and Xcode. Empty turns the Mac build off.
+        type: string
+        default: '["self-hosted", "macOS", "unreal"]'
+      allow-warnings:
+        description: Let compiler warnings in the plugin's own sources through. By default any warning fails the build, as Fab's review expects none.
+        type: boolean
+        default: false
       release:
         description: Release the next version, worked out from the commit messages since the last release. Default branch only.
         type: boolean
@@ -91,6 +102,7 @@ jobs:
       version: ${{ steps.package.outputs.version }}
       release: ${{ steps.kind.outputs.release }}
       tag: ${{ steps.kind.outputs.tag }}
+      mac: ${{ steps.package.outputs.mac }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -164,6 +176,11 @@ jobs:
           engine-versions: ${{ inputs.engine-versions }}
           version: ${{ steps.kind.outputs.tag }}
 
+      - name: Mac build
+        if: inputs.mac-build-runner != '' && steps.package.outputs.mac == 'false'
+        shell: powershell
+        run: Write-Host '::notice title=No Mac build::No module allows Mac in its PlatformAllowList or PlatformDenyList, so Fab does not build the plugin for Mac and neither does this run.'
+
       # Every run, so problems show long before a release: errors with publish-docs, else warnings.
       # Without publish-docs it never fails the run, whatever goes wrong.
       - name: Check docs
@@ -212,6 +229,7 @@ jobs:
           package: dist\${{ needs.package.outputs.plugin }}-${{ needs.package.outputs.version }}-UE${{ matrix.engine }}.zip
           engine-version: ${{ matrix.engine }}
           strict-includes: ${{ inputs.strict-includes }}
+          allow-warnings: ${{ inputs.allow-warnings }}
 
       - id: test
         if: inputs.run-tests
@@ -250,10 +268,62 @@ jobs:
           path: ${{ steps.build.outputs.plugin-dir }}
           retention-days: 14
 
+  # The same zip on the Mac build machine, as Fab's Mac build compiles it with clang, which stops on
+  # warnings MSVC never raises. No tests: they run on Windows.
+  mac:
+    name: Build on Mac (UE ${{ matrix.engine }})
+    needs: package
+    # Skipped only when the package step says no module allows Mac. A package action without that
+    # output, such as an older @v1, runs this job, so the run fails rather than skip the check unseen.
+    if: inputs.mac-build-runner != '' && needs.package.outputs.mac != 'false'
+    # The fallback is never used: the job is skipped first. It keeps fromJSON off an empty string.
+    runs-on: ${{ fromJSON(inputs.mac-build-runner || '"none"') }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      # Concurrent BuildPlugin runs on one machine share UnrealBuildTool state and fail spuriously.
+      max-parallel: 1
+      matrix:
+        engine: ${{ fromJSON(inputs.engine-versions) }}
+    steps:
+      # The workspace survives between jobs on a self-hosted runner.
+      - name: Clear previous packages
+        shell: pwsh
+        run: if (Test-Path dist) { Remove-Item dist -Recurse -Force }
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: source-packages
+          path: dist
+
+      - id: build
+        uses: KhaosSystems/unreal-actions/plugin/build@v1
+        with:
+          package: dist/${{ needs.package.outputs.plugin }}-${{ needs.package.outputs.version }}-UE${{ matrix.engine }}.zip
+          engine-version: ${{ matrix.engine }}
+          strict-includes: ${{ inputs.strict-includes }}
+          allow-warnings: ${{ inputs.allow-warnings }}
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs-UE${{ matrix.engine }}-Mac
+          path: ${{ runner.temp }}/b/logs
+          if-no-files-found: ignore
+          retention-days: 14
+
   release:
     name: Publish release
-    needs: [package, build]
-    if: needs.package.outputs.release == 'true'
+    needs: [package, build, mac]
+    # The Mac build is skipped when it is turned off or the package step says no module allows Mac;
+    # otherwise it must pass.
+    # A skipped need would skip this job without the explicit checks.
+    if: >-
+      needs.package.outputs.release == 'true' && !cancelled() && needs.package.result == 'success'
+      && needs.build.result == 'success' && (needs.mac.result == 'success' || needs.mac.result == 'skipped')
     runs-on: windows-latest
     permissions:
       contents: write
@@ -311,7 +381,8 @@ jobs:
   docs:
     name: Publish docs
     needs: release
-    if: inputs.publish-docs
+    # Explicit, as a skipped Mac build further up would otherwise skip this job too.
+    if: inputs.publish-docs && needs.release.result == 'success' && !cancelled()
     runs-on: windows-latest
     permissions: {}
     steps:
@@ -353,7 +424,7 @@ jobs:
 
   notify:
     name: Notify
-    needs: [package, build, release, docs]
+    needs: [package, build, mac, release, docs]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions: {}
@@ -363,7 +434,7 @@ jobs:
           WEBHOOK: ${{ secrets.discord-webhook-url }}
           PLUGIN: ${{ needs.package.outputs.plugin }}
           VERSION: ${{ needs.package.outputs.version }}
-          RESULTS: ${{ needs.package.result }} ${{ needs.build.result }} ${{ needs.release.result }}
+          RESULTS: ${{ needs.package.result }} ${{ needs.build.result }} ${{ needs.mac.result }} ${{ needs.release.result }}
           RELEASE_RESULT: ${{ needs.release.result }}
           RELEASE_URL: ${{ needs.release.outputs.url }}
           RELEASE_ATTEMPT: ${{ needs.release.outputs.attempt }}
