@@ -4,6 +4,10 @@
 # `shell: powershell` steps use. That rules out ?:, ??, &&, Join-Path with more than two parts and
 # [IO.Path]::GetRelativePath, and it is why files are written through .NET rather than
 # Set-Content/Out-File, whose UTF-8 in 5.1 always carries a BOM.
+#
+# What the Mac build uses also runs under PowerShell 7 on macOS: paths are built with Join-Paths,
+# never with a backslash, and Get-HostPlatform stands in for $IsWindows and $IsMacOS, which 5.1
+# does not have.
 
 $ErrorActionPreference = 'Stop'
 
@@ -103,6 +107,20 @@ function Stop-CiGroup
 #endregion
 
 #region Paths and processes
+
+<#
+.SYNOPSIS
+The machine this runs on, as Unreal names the platform: Win64, Mac or Linux.
+
+.DESCRIPTION
+Windows PowerShell 5.1 runs only on Windows and has no $IsWindows or $IsMacOS; PowerShell 7 has both.
+#>
+function Get-HostPlatform
+{
+	if ($PSVersionTable.PSEdition -ne 'Core' -or $IsWindows) { return 'Win64' }
+	if ($IsMacOS) { return 'Mac' }
+	return 'Linux'
+}
 
 function Join-Paths
 {
@@ -225,16 +243,23 @@ Find an installed engine by version, e.g. '5.8'.
 .DESCRIPTION
 If UE_ROOT_<major>_<minor> is set, that is the engine, and it is an error for it to be anything
 else; an explicit setting never quietly falls back to another install. Otherwise looks, in order,
-at the Epic Games Launcher's install list, the registry key the launcher writes, and the default
-install folder. The launcher list comes before the registry because the registry key is not
-always written; a 5.8 launcher install was seen without one.
+at the Epic Games Launcher's install list, on Windows the registry key the launcher writes, and the
+default install folder. The launcher list comes before the registry because the registry key is
+not always written; a 5.8 launcher install was seen without one.
 
 A missing engine is an error, not a warning: Fab compiles the plugin for every engine version on
 the listing, so one that cannot be built here is one that would ship untested.
+
+HostPlatform and LauncherList stand in for this machine's, so the lookup of another platform can be
+tested anywhere.
 #>
 function Find-UnrealEngine
 {
-	param([Parameter(Mandatory)][string]$Version)
+	param(
+		[Parameter(Mandatory)][string]$Version,
+		[string]$HostPlatform = (Get-HostPlatform),
+		[string]$LauncherList
+	)
 
 	if ($Version -notmatch '^\d+\.\d+$')
 	{
@@ -245,27 +270,78 @@ function Find-UnrealEngine
 	$Override = [Environment]::GetEnvironmentVariable($OverrideName)
 	if ($Override)
 	{
-		$Problem = Test-UnrealEngineRoot $Override $Version
+		$Problem = Test-UnrealEngineRoot $Override $Version -HostPlatform $HostPlatform
 		if ($Problem)
 		{
 			$Message = "$OverrideName is set to '$Override', but $Problem Fix or unset it."
 			Write-CiAnnotation error $Message -Title "Unreal Engine $Version not found"
 			throw $Message
 		}
-		return (Get-FullPath $Override).TrimEnd('\')
+		return (Get-FullPath $Override).TrimEnd('\', '/')
 	}
+
+	if (-not $PSBoundParameters.ContainsKey('LauncherList')) { $LauncherList = Get-LauncherInstallList $HostPlatform }
+	$Candidates = @(Get-UnrealEngineCandidates -Version $Version -HostPlatform $HostPlatform -LauncherList $LauncherList)
+
+	foreach ($Root in $Candidates)
+	{
+		if (-not $Root) { continue }
+		# A stale launcher entry or registry key can point at a removed or different engine.
+		if (Test-UnrealEngineRoot $Root $Version -HostPlatform $HostPlatform) { continue }
+		return (Get-FullPath $Root).TrimEnd('\', '/')
+	}
+
+	$Machine = [Environment]::MachineName
+	$Message = "Unreal Engine $Version is not installed on $Machine. Install it from the Epic Games Launcher, or set $OverrideName to its root folder. Looked in: $(($Candidates | Select-Object -Unique) -join '; ')"
+	Write-CiAnnotation error $Message -Title "Unreal Engine $Version not found"
+	throw $Message
+}
+
+<#
+.SYNOPSIS
+Where the Epic Games Launcher lists the engines it installed, or nothing on a platform it does not run on.
+
+.DESCRIPTION
+The editor reads ApplicationSettingsDir()/UnrealEngineLauncher/LauncherInstalled.dat
+(DesktopPlatformBase.cpp). ApplicationSettingsDir() is %ProgramData%\Epic on Windows and, on a Mac,
+the user's ~/Library/Application Support/Epic (ApplePlatformProcess.cpp), so on a Mac only the
+installs of the user the runner runs as are listed.
+#>
+function Get-LauncherInstallList([string]$HostPlatform = (Get-HostPlatform))
+{
+	if ($HostPlatform -eq 'Win64' -and $env:ProgramData)
+	{
+		return Join-Paths $env:ProgramData 'Epic' 'UnrealEngineLauncher' 'LauncherInstalled.dat'
+	}
+	if ($HostPlatform -eq 'Mac' -and $HOME)
+	{
+		return Join-Paths $HOME 'Library' 'Application Support' 'Epic' 'UnrealEngineLauncher' 'LauncherInstalled.dat'
+	}
+	return $null
+}
+
+<#
+.SYNOPSIS
+The folders an engine version may be in, most likely first, without checking them.
+#>
+function Get-UnrealEngineCandidates
+{
+	param(
+		[Parameter(Mandatory)][string]$Version,
+		[string]$HostPlatform = (Get-HostPlatform),
+		[string]$LauncherList
+	)
 
 	$Candidates = New-Object System.Collections.Generic.List[string]
 
-	$LauncherList = Join-Paths $env:ProgramData 'Epic' 'UnrealEngineLauncher' 'LauncherInstalled.dat'
-	if (Test-Path -LiteralPath $LauncherList)
+	if ($LauncherList -and (Test-Path -LiteralPath $LauncherList))
 	{
 		try
 		{
 			$Installs = ([IO.File]::ReadAllText($LauncherList) | ConvertFrom-Json).InstallationList
 			foreach ($Install in $Installs)
 			{
-				if ($Install.AppName -eq "UE_$Version") { $Candidates.Add($Install.InstallLocation) }
+				if ($Install.AppName -eq "UE_$Version" -and $Install.InstallLocation) { $Candidates.Add($Install.InstallLocation) }
 			}
 		}
 		catch
@@ -274,23 +350,45 @@ function Find-UnrealEngine
 		}
 	}
 
-	$Registry = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\EpicGames\Unreal Engine\$Version" -Name InstalledDirectory -ErrorAction SilentlyContinue
-	if ($Registry) { $Candidates.Add($Registry.InstalledDirectory) }
-
-	if ($env:ProgramFiles) { $Candidates.Add((Join-Paths $env:ProgramFiles 'Epic Games' "UE_$Version")) }
-
-	foreach ($Root in $Candidates)
+	if ($HostPlatform -eq 'Win64')
 	{
-		if (-not $Root) { continue }
-		# A stale launcher entry or registry key can point at a removed or different engine.
-		if (Test-UnrealEngineRoot $Root $Version) { continue }
-		return (Get-FullPath $Root).TrimEnd('\')
+		$Registry = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\EpicGames\Unreal Engine\$Version" -Name InstalledDirectory -ErrorAction SilentlyContinue
+		if ($Registry) { $Candidates.Add($Registry.InstalledDirectory) }
+		if ($env:ProgramFiles) { $Candidates.Add((Join-Paths $env:ProgramFiles 'Epic Games' "UE_$Version")) }
+	}
+	elseif ($HostPlatform -eq 'Mac')
+	{
+		# The launcher's default install folder on a Mac.
+		$Candidates.Add("/Users/Shared/Epic Games/UE_$Version")
 	}
 
-	$Machine = [Environment]::MachineName
-	$Message = "Unreal Engine $Version is not installed on $Machine. Install it from the Epic Games Launcher, or set $OverrideName to its root folder. Looked in: $(($Candidates | Select-Object -Unique) -join '; ')"
-	Write-CiAnnotation error $Message -Title "Unreal Engine $Version not found"
-	throw $Message
+	return $Candidates.ToArray()
+}
+
+<#
+.SYNOPSIS
+How to run an engine's RunUAT on a platform.
+
+.DESCRIPTION
+RunUAT.sh is run through /bin/bash, so it works whether or not its executable bit survived the
+install.
+
+.OUTPUTS
+FilePath, the program to start, and Arguments, which go before UAT's own.
+#>
+function Get-RunUATCommand
+{
+	param(
+		[Parameter(Mandatory)][string]$EngineRoot,
+		[string]$HostPlatform = (Get-HostPlatform)
+	)
+
+	$BatchFiles = Join-Paths $EngineRoot 'Engine' 'Build' 'BatchFiles'
+	if ($HostPlatform -eq 'Win64')
+	{
+		return [pscustomobject]@{ FilePath = (Join-Paths $BatchFiles 'RunUAT.bat'); Arguments = @() }
+	}
+	return [pscustomobject]@{ FilePath = '/bin/bash'; Arguments = @(Join-Paths $BatchFiles 'RunUAT.sh') }
 }
 
 <#
@@ -303,12 +401,15 @@ function Test-UnrealEngineRoot
 {
 	param(
 		[Parameter(Mandatory)][string]$Root,
-		[Parameter(Mandatory)][string]$Version
+		[Parameter(Mandatory)][string]$Version,
+		[string]$HostPlatform = (Get-HostPlatform)
 	)
 
-	if (-not (Test-Path -LiteralPath (Join-Paths $Root 'Engine' 'Build' 'BatchFiles' 'RunUAT.bat')))
+	$RunUAT = 'RunUAT.sh'
+	if ($HostPlatform -eq 'Win64') { $RunUAT = 'RunUAT.bat' }
+	if (-not (Test-Path -LiteralPath (Join-Paths $Root 'Engine' 'Build' 'BatchFiles' $RunUAT)))
 	{
-		return 'there is no engine there (no Engine\Build\BatchFiles\RunUAT.bat).'
+		return "there is no engine there (no Engine/Build/BatchFiles/$RunUAT)."
 	}
 
 	$Found = (Get-UnrealEngineBuild $Root).Version
@@ -342,6 +443,41 @@ function Get-UnrealEngineBuild
 	}
 }
 
+<#
+.SYNOPSIS
+The developer folder xcode-select points at, or nothing when there is none.
+#>
+function Get-XcodeDeveloperDir
+{
+	if (-not (Get-Command 'xcode-select' -ErrorAction SilentlyContinue)) { return '' }
+	$Result = Invoke-NativeQuiet 'xcode-select' @('-p')
+	if ($Result.ExitCode -ne 0) { return '' }
+	return (@($Result.Output) -join '').Trim()
+}
+
+<#
+.SYNOPSIS
+Check that a Mac can compile for Unreal, given what xcode-select -p printed.
+
+.DESCRIPTION
+UnrealBuildTool takes its compiler and SDK from the folder xcode-select points at, and refuses the
+command line tools on their own (AppleToolChainSettings.cs): it needs Xcode.
+.OUTPUTS
+Nothing if it can, otherwise what is wrong and how to fix it.
+#>
+function Get-XcodeProblem([string]$DeveloperDir)
+{
+	if (-not $DeveloperDir)
+	{
+		return 'Xcode is not set up: xcode-select -p found no developer folder. Install Xcode, open it once to accept its license and install its components, then run sudo xcode-select -s /Applications/Xcode.app.'
+	}
+	if ($DeveloperDir -match 'CommandLineTools')
+	{
+		return "xcode-select -p is $DeveloperDir, the command line tools on their own; UnrealBuildTool needs Xcode. Install Xcode and run sudo xcode-select -s /Applications/Xcode.app."
+	}
+	return $null
+}
+
 #endregion
 
 #region Caches
@@ -351,8 +487,10 @@ function Get-UnrealEngineBuild
 # touched, and the defaults are shared:
 #
 #   UnrealBuildAccelerator  C:\ProgramData\Epic\UnrealBuildAccelerator for every engine on the
-#                           machine, size capped (40 GB), so other builds' entries get evicted.
-#                           Remote executors and UBA cache servers may be set up for other projects.
+#                           machine, or ~/.epic/UnrealBuildAccelerator on a Mac for every build the
+#                           user runs (UBAExecutor.cs); size capped (40 GB), so other builds'
+#                           entries get evicted. Remote executors and UBA cache servers may be set
+#                           up for other projects.
 #   Zen                     One local server on port 8558 with a version-agnostic data folder in
 #                           %LOCALAPPDATA%. An editor that wants a different data folder or version
 #                           shuts the running server down, under whatever else was using it.
@@ -370,7 +508,7 @@ function Get-PluginCache
 {
 	param([Parameter(Mandatory)][string]$CacheDir)
 
-	$Root = (Get-FullPath $CacheDir).TrimEnd('\')
+	$Root = (Get-FullPath $CacheDir).TrimEnd('\', '/')
 	$Cache = [pscustomobject]@{
 		Root = $Root
 		Ddc = Join-Paths $Root 'DerivedDataCache'
@@ -402,6 +540,10 @@ Since 5.8 the UBA local executor is UnrealBuildTool's local executor and cannot 
 its root, where it keeps its store, is moved into the cache folder. Everything that would reach
 beyond this machine or into another project's setup is off: remote UBA and Horde, UBA cache
 servers, XGE, FASTBuild and SNDBS.
+
+UnrealBuildTool reads these the same way on a Mac. RootDir moves UBA's ~/.epic/UnrealBuildAccelerator
+default there as it moves the ProgramData one on Windows, and FASTBuild, which also runs on a Mac,
+stays off; XGE and SNDBS are Windows-only, so turning them off there changes nothing.
 #>
 function Set-UnrealBuildToolIsolation
 {
@@ -491,6 +633,33 @@ function Get-PluginDescriptor
 		Raw = $Raw
 		Json = $Json
 	}
+}
+
+<#
+.SYNOPSIS
+Whether any of the plugin's modules builds for a platform, by its PlatformAllowList and
+PlatformDenyList.
+
+.DESCRIPTION
+A module with neither list builds everywhere; one with an allow list only on the platforms it names;
+a deny list takes platforms away. Fab builds the plugin for every platform a module allows.
+#>
+function Test-PluginAllowsPlatform
+{
+	param(
+		[Parameter(Mandatory)]$Descriptor,
+		[Parameter(Mandatory)][string]$Platform
+	)
+
+	foreach ($Module in @(Get-JsonValue $Descriptor.Json 'Modules' @()))
+	{
+		$Allow = @(Get-JsonValue $Module 'PlatformAllowList' @())
+		$Deny = @(Get-JsonValue $Module 'PlatformDenyList' @())
+		if ($Allow.Count -gt 0 -and -not ($Allow -contains $Platform)) { continue }
+		if ($Deny -contains $Platform) { continue }
+		return $true
+	}
+	return $false
 }
 
 <#
@@ -1030,6 +1199,55 @@ function Test-PluginContentVersions
 
 #region Build output
 
+# MSVC, and UnrealHeaderTool on every platform: path(line[,column]): level [code]: message. The
+# compiler writes 'error', UnrealHeaderTool 'Error'. The path is absolute, C:\... or /...
+$script:MsvcDiagnostic = [regex]'^\s*(?<file>(?:[A-Za-z]:[\\/]|/)[^(:]+?)\((?<line>\d+)(?:,\d+)?\)\s*:\s*(?<level>(?i:fatal error|error|warning|note))(?:\s+(?<code>[A-Z]+\d+))?\s*:\s*(?<message>.+)$'
+
+# Clang on a Mac or Linux: path:line[:column]: level: message [-Wflag]. On Windows UnrealBuildTool
+# makes clang write the MSVC form instead (ClangToolChain.cs), so the path here is always /...
+$script:ClangDiagnostic = [regex]'^\s*(?<file>/[^:]+?):(?<line>\d+):(?:\d+:)?\s*(?<level>fatal error|error|warning|note):\s*(?<message>.*?)(?:\s*\[(?<flags>-W[^\]]*)\])?\s*$'
+
+<#
+.SYNOPSIS
+Read one line of compiler or UnrealHeaderTool output as a diagnostic.
+
+.DESCRIPTION
+Understands MSVC's and UnrealHeaderTool's form and clang's. Terminal colours, which clang adds when
+UnrealBuildTool asks for them, are ignored.
+
+.OUTPUTS
+File (as written), Line, Level (error, warning or note; a fatal error is an error), Code (C4996,
+-Wdeprecated-declarations, or empty) and Message, or nothing for any other line.
+#>
+function ConvertFrom-CompilerDiagnostic([string]$Line)
+{
+	$Line = [regex]::Replace($Line, '\x1B\[[0-9;]*[A-Za-z]', '')
+	$Match = $script:MsvcDiagnostic.Match($Line)
+	$Code = ''
+	if ($Match.Success)
+	{
+		if ($Match.Groups['code'].Success) { $Code = $Match.Groups['code'].Value }
+	}
+	else
+	{
+		$Match = $script:ClangDiagnostic.Match($Line)
+		if (-not $Match.Success) { return }
+		# [-Werror,-Wunreachable-code-loop-increment] names the warning that -Werror made an error.
+		$Flags = @($Match.Groups['flags'].Value.Split(',') | Where-Object { $_ -like '-W*' -and $_ -ne '-Werror' })
+		if ($Flags.Count -gt 0) { $Code = $Flags[-1] }
+	}
+
+	$Level = $Match.Groups['level'].Value.ToLowerInvariant()
+	if ($Level -eq 'fatal error') { $Level = 'error' }
+	return [pscustomobject]@{
+		File = $Match.Groups['file'].Value
+		Line = [int]$Match.Groups['line'].Value
+		Level = $Level
+		Code = $Code
+		Message = $Match.Groups['message'].Value.Trim()
+	}
+}
+
 <#
 .SYNOPSIS
 Make a callback that turns compiler output lines into annotations on the plugin's own files.
@@ -1039,57 +1257,94 @@ BuildPlugin compiles a copy of the plugin under HostProject/Plugins/<Name>/, so 
 that in a reported path is the path in the plugin's repository. Diagnostics in engine files are
 skipped, except that an error raised inside an engine header, typically a template instantiated
 with one of the plugin's types, is reported at the first note that points back into the plugin.
+
+.PARAMETER Diagnostics
+A list each reported diagnostic is added to, with Severity (error or warning), File, Line, Code and
+Message, for the caller to count.
 #>
 function New-CompileDiagnosticReporter
 {
 	param(
 		[Parameter(Mandatory)][string]$PluginName,
-		[string]$Label = 'Compile'
+		[string]$Label = 'Compile',
+		[System.Collections.Generic.List[object]]$Diagnostics
 	)
 
 	$PluginPath = [regex]('(?i)[\\/]Plugins[\\/]' + [regex]::Escape($PluginName) + '[\\/](?<path>.+)$')
-	# The compiler writes 'error', UnrealHeaderTool 'Error'.
-	$Pattern = [regex]'^\s*(?<file>[A-Za-z]:[\\/][^(]+?)\((?<line>\d+)(?:,\d+)?\)\s*:\s*(?<level>(?i:fatal error|error|warning|note))(?:\s+(?<code>[A-Z]+\d+))?\s*:\s*(?<message>.+)$'
 	$State = @{ Pending = $null; Reported = @{} }
+	if ($null -eq $Diagnostics) { $Diagnostics = New-Object System.Collections.Generic.List[object] }
 
 	return {
 		param([string]$Line)
-		$Match = $Pattern.Match($Line)
-		if (-not $Match.Success) { return }
+		$Parsed = ConvertFrom-CompilerDiagnostic $Line
+		if (-not $Parsed) { return }
 
-		$Level = $Match.Groups['level'].Value.ToLowerInvariant()
-		$PathMatch = $PluginPath.Match($Match.Groups['file'].Value)
-		if ($Level -eq 'note')
+		$PathMatch = $PluginPath.Match($Parsed.File)
+		if ($Parsed.Level -eq 'note')
 		{
 			if (-not $State.Pending -or -not $PathMatch.Success) { return }
 			$Diagnostic = $State.Pending
-			$Message = "$($Diagnostic.Groups['message'].Value.Trim()) (raised in $([IO.Path]::GetFileName($Diagnostic.Groups['file'].Value)), from here)"
+			$Message = "$($Diagnostic.Message) (raised in $(($Diagnostic.File -split '[\\/]')[-1]), from here)"
 		}
 		elseif (-not $PathMatch.Success)
 		{
-			if ($Level -ne 'warning') { $State.Pending = $Match }
+			if ($Parsed.Level -ne 'warning') { $State.Pending = $Parsed }
 			return
 		}
 		else
 		{
-			$Diagnostic = $Match
-			$Message = $Match.Groups['message'].Value.Trim()
+			$Diagnostic = $Parsed
+			$Message = $Parsed.Message
 		}
 		$State.Pending = $null
 
 		$File = $PathMatch.Groups['path'].Value.Replace('\', '/')
-		$LineNumber = [int]$Match.Groups['line'].Value
+		$LineNumber = $Parsed.Line
 		$Key = "$File|$LineNumber|$Message"
 		if ($State.Reported.ContainsKey($Key)) { return }
 		$State.Reported[$Key] = $true
 
-		$DiagnosticLevel = $Diagnostic.Groups['level'].Value.ToLowerInvariant()
 		$Severity = 'error'
-		if ($DiagnosticLevel -eq 'warning') { $Severity = 'warning' }
-		$Title = "$Label $DiagnosticLevel"
-		if ($Diagnostic.Groups['code'].Success) { $Title += " $($Diagnostic.Groups['code'].Value)" }
+		if ($Diagnostic.Level -eq 'warning') { $Severity = 'warning' }
+		$Title = "$Label $($Diagnostic.Level)"
+		if ($Diagnostic.Code) { $Title += " $($Diagnostic.Code)" }
 		Write-CiAnnotation $Severity $Message -File $File -Line $LineNumber -Title $Title
+		$Diagnostics.Add([pscustomobject]@{ Severity = $Severity; File = $File; Line = $LineNumber; Code = $Diagnostic.Code; Message = $Message })
 	}.GetNewClosure()
+}
+
+<#
+.SYNOPSIS
+Say why a BuildPlugin pass fails Fab's "no errors or consequential warnings", from the diagnostics
+it reported in the plugin's own sources.
+
+.DESCRIPTION
+Fab's review builds the plugin with clang on a Mac, where warnings that MSVC never raises stop the
+build, and it declines a plugin whose build warns. So any warning in the plugin's own files fails
+the pass. UnrealBuildTool's bWarningsAsErrors is not used for this: it needs a unique build
+environment, which an installed engine cannot give a plugin, and it would also stop on engine
+headers.
+
+.OUTPUTS
+Nothing when there are no warnings, otherwise a message that lists them.
+#>
+function Get-CompileWarningFailure
+{
+	param(
+		[object[]]$Diagnostics = @(),
+		[Parameter(Mandatory)][string]$Pass,
+		[Parameter(Mandatory)][string]$EngineVersion
+	)
+
+	$Warnings = @($Diagnostics | Where-Object { $_ -and $_.Severity -eq 'warning' })
+	if ($Warnings.Count -eq 0) { return $null }
+
+	$List = @($Warnings | ForEach-Object {
+		$Code = ''
+		if ($_.Code) { $Code = " [$($_.Code)]" }
+		"  $($_.File):$($_.Line): $($_.Message)$Code"
+	})
+	return "$Pass against Unreal Engine $EngineVersion compiled with $($Warnings.Count) warning(s) in the plugin's own sources. Fab's review expects a build with no consequential warnings, and its Mac build turns many of them into errors:`n$($List -join "`n")`nFix them, or set allow-warnings to let them through."
 }
 
 #endregion
