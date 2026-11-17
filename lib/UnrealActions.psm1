@@ -1598,16 +1598,24 @@ function New-Badge
 
 <#
 .SYNOPSIS
-The three badges a plugin repository shows: tests, supported engines and lines of code.
+The badges a plugin repository shows: tests, supported engines, lines of code, and whether it
+builds on Windows and on a Mac.
 .PARAMETER Results
 The test-results.json of each engine version that got as far as its tests.
+.PARAMETER Builds
+One { platform, engine, result } per build job that recorded its result; platform is Win64 or
+Mac, result the build step's outcome.
+.PARAMETER MacBuild
+on, unsupported (no module allows Mac) or off (the workflow turned the Mac build off).
 #>
 function Get-PluginBadges
 {
 	param(
 		[Parameter(Mandatory)][string[]]$Engines,
 		[object[]]$Results = @(),
-		[Parameter(Mandatory)][int]$Lines
+		[Parameter(Mandatory)][int]$Lines,
+		[object[]]$Builds = @(),
+		[ValidateSet('on', 'unsupported', 'off')][string]$MacBuild = 'on'
 	)
 
 	$Ran = @{}
@@ -1644,11 +1652,36 @@ function Get-PluginBadges
 	$LinesText = [string]$Lines
 	if ($Lines -ge 1000) { $LinesText = [string]::Format($Invariant, '{0:0.#}k', $Lines / 1000.0) }
 
-	return [ordered]@{
+	$Badges = [ordered]@{
 		'tests.json' = $Tests
 		'unreal.json' = New-Badge 'Unreal Engine' ($Engines -join ' | ') '313131' 'unrealengine'
 		'loc.json' = New-Badge 'lines of code' $LinesText 'blue'
+		'windows.json' = Get-PlatformBadge 'Windows' 'Win64' $Engines $Builds
 	}
+	switch ($MacBuild)
+	{
+		'unsupported' { $Badges['macos.json'] = New-Badge 'macOS' 'not supported' 'lightgrey' }
+		'off' { $Badges['macos.json'] = New-Badge 'macOS' 'not built' 'lightgrey' }
+		default { $Badges['macos.json'] = Get-PlatformBadge 'macOS' 'Mac' $Engines $Builds }
+	}
+	return $Badges
+}
+
+<#
+.SYNOPSIS
+One platform's build badge: the engine versions when all built, else the ones that failed.
+.DESCRIPTION
+An engine with no result for the platform counts as failed: its build job never got that far.
+#>
+function Get-PlatformBadge([string]$Label, [string]$Platform, [string[]]$Engines, [object[]]$Builds)
+{
+	$Failing = @($Engines | Where-Object {
+		$Engine = $_
+		-not ($Builds | Where-Object { $_.platform -eq $Platform -and [string]$_.engine -eq $Engine -and $_.result -eq 'success' })
+	})
+	if ($Failing.Count -eq 0) { return New-Badge $Label ($Engines -join ' | ') 'brightgreen' }
+	if ($Failing.Count -eq $Engines.Count) { return New-Badge $Label 'failing' 'red' }
+	return New-Badge $Label "$($Failing -join ' | ') failing" 'red'
 }
 
 #endregion
