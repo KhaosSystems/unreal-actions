@@ -1,5 +1,5 @@
 name: Build Unreal plugin
-description: Compile a plugin source zip with BuildPlugin against a Launcher-installed engine, as Fab does. Fails first if the engine is missing.
+description: Compile a plugin source zip with BuildPlugin against a Launcher-installed engine, as Fab does, on Windows or a Mac. Fails first if the engine is missing, and on any compiler warning in the plugin's own sources.
 
 inputs:
   package:
@@ -11,6 +11,9 @@ inputs:
   strict-includes:
     description: Also compile without unity builds or shared precompiled headers.
     default: 'true'
+  allow-warnings:
+    description: Let compiler warnings in the plugin's own sources through. By default they fail the build, as Fab's review expects none.
+    default: 'false'
   work-dir:
     description: Scratch folder; keep it short. Defaults to b in the runner's temp folder.
     default: ''
@@ -21,32 +24,62 @@ inputs:
 outputs:
   plugin-dir:
     description: The packaged plugin, with binaries.
-    value: ${{ steps.build.outputs.plugin-dir }}
+    value: ${{ steps.build-windows.outputs.plugin-dir || steps.build-unix.outputs.plugin-dir }}
   engine-root:
     description: Where the engine is installed.
-    value: ${{ steps.engine.outputs.root }}
+    value: ${{ steps.engine-windows.outputs.root || steps.engine-unix.outputs.root }}
 
+# Each step twice: Windows PowerShell on Windows, whose runner has no PowerShell 7, and PowerShell 7
+# elsewhere. The scripts are the same.
 runs:
   using: composite
   steps:
-    - id: engine
+    - id: engine-windows
+      if: runner.os == 'Windows'
       shell: powershell
       env:
         ENGINE: ${{ inputs.engine-version }}
       run: |
-        & "$env:GITHUB_ACTION_PATH\Find-UnrealEngine.ps1" -EngineVersion $env:ENGINE
+        & (Join-Path $env:GITHUB_ACTION_PATH 'Find-UnrealEngine.ps1') -EngineVersion $env:ENGINE
 
-    - id: build
+    - id: engine-unix
+      if: runner.os != 'Windows'
+      shell: pwsh
+      env:
+        ENGINE: ${{ inputs.engine-version }}
+      run: |
+        & (Join-Path $env:GITHUB_ACTION_PATH 'Find-UnrealEngine.ps1') -EngineVersion $env:ENGINE
+
+    - id: build-windows
+      if: runner.os == 'Windows'
       shell: powershell
       env:
         ENGINE: ${{ inputs.engine-version }}
         PACKAGE: ${{ inputs.package }}
         STRICT_INCLUDES: ${{ inputs.strict-includes }}
+        ALLOW_WARNINGS: ${{ inputs.allow-warnings }}
         WORK_DIR: ${{ inputs.work-dir }}
         CACHE_DIR: ${{ inputs.cache-dir }}
       run: |
         $WorkDir = $env:WORK_DIR
-        if (-not $WorkDir) { $WorkDir = "$env:RUNNER_TEMP\b" }
+        if (-not $WorkDir) { $WorkDir = Join-Path $env:RUNNER_TEMP 'b' }
         $CacheDir = $env:CACHE_DIR
-        if (-not $CacheDir) { $CacheDir = "$env:GITHUB_WORKSPACE\.ue-cache\UE$env:ENGINE" }
-        & "$env:GITHUB_ACTION_PATH\Build-Plugin.ps1" -PackageZip $env:PACKAGE -EngineVersion $env:ENGINE -WorkDir $WorkDir -CacheDir $CacheDir -StrictIncludes:($env:STRICT_INCLUDES -eq 'true')
+        if (-not $CacheDir) { $CacheDir = Join-Path (Join-Path $env:GITHUB_WORKSPACE '.ue-cache') "UE$env:ENGINE" }
+        & (Join-Path $env:GITHUB_ACTION_PATH 'Build-Plugin.ps1') -PackageZip $env:PACKAGE -EngineVersion $env:ENGINE -WorkDir $WorkDir -CacheDir $CacheDir -StrictIncludes:($env:STRICT_INCLUDES -eq 'true') -AllowWarnings:($env:ALLOW_WARNINGS -eq 'true')
+
+    - id: build-unix
+      if: runner.os != 'Windows'
+      shell: pwsh
+      env:
+        ENGINE: ${{ inputs.engine-version }}
+        PACKAGE: ${{ inputs.package }}
+        STRICT_INCLUDES: ${{ inputs.strict-includes }}
+        ALLOW_WARNINGS: ${{ inputs.allow-warnings }}
+        WORK_DIR: ${{ inputs.work-dir }}
+        CACHE_DIR: ${{ inputs.cache-dir }}
+      run: |
+        $WorkDir = $env:WORK_DIR
+        if (-not $WorkDir) { $WorkDir = Join-Path $env:RUNNER_TEMP 'b' }
+        $CacheDir = $env:CACHE_DIR
+        if (-not $CacheDir) { $CacheDir = Join-Path (Join-Path $env:GITHUB_WORKSPACE '.ue-cache') "UE$env:ENGINE" }
+        & (Join-Path $env:GITHUB_ACTION_PATH 'Build-Plugin.ps1') -PackageZip $env:PACKAGE -EngineVersion $env:ENGINE -WorkDir $WorkDir -CacheDir $CacheDir -StrictIncludes:($env:STRICT_INCLUDES -eq 'true') -AllowWarnings:($env:ALLOW_WARNINGS -eq 'true')

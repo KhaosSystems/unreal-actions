@@ -3,8 +3,8 @@
 GitHub Actions for Unreal Engine projects, grouped by what they work on.
 
 `plugin/` covers code plugins sold on Fab: it checks a plugin against Fab's requirements, builds
-its source zip the way Epic does, runs its tests, releases it, publishes its docs, and keeps its
-README badges current.
+its source zip the way Epic does, on Windows and a Mac, runs its tests, releases it, publishes its
+docs, and keeps its README badges current.
 `commits/` checks commit messages and works out version numbers from them. `game/` runs in a game
 repository: it brings in private plugins' releases.
 
@@ -48,6 +48,12 @@ notice with the year and the descriptor's `CreatedBy` on the first line of every
 `// Copyright 2026 Example Studio. All Rights Reserved.`), and tests named `<Plugin>.<Area>.<Case>`.
 The first run says what is missing.
 
+**Warnings fail the build**, on Windows and on the Mac: Fab's review wants a plugin that builds with
+no consequential warnings, and its Mac build turns many of them into errors that MSVC never raises.
+Every warning in the plugin's own sources is an annotation on the line; `allow-warnings: true` in
+`with:` lets them through. Fab builds for every platform a module's `PlatformAllowList` allows, so a
+plugin whose modules allow Mac is built on the Mac machine too; `mac-build-runner: ''` turns that off.
+
 **Commits** are [conventional commits](https://www.conventionalcommits.org), such as
 `fix: crash when saving` or `feat(ui): outline panel`; every pull request and push checks them.
 
@@ -61,7 +67,7 @@ the Fab publisher portal. Pushing a `vX.Y.Z` tag yourself still works too.
 | Action | |
 | --- | --- |
 | [`plugin/package`](plugin/package/action.yml) | Fab checks, then the source zip Fab is given, per engine version. |
-| [`plugin/build`](plugin/build/action.yml) | BuildPlugin on that zip against a Launcher-installed engine, plus a strict-includes pass. |
+| [`plugin/build`](plugin/build/action.yml) | BuildPlugin on that zip against a Launcher-installed engine, on Windows or a Mac, plus a strict-includes pass. Fails on any warning in the plugin. |
 | [`plugin/test`](plugin/test/action.yml) | The plugin's automation tests in a headless editor. |
 | [`plugin/release`](plugin/release/action.yml) | GitHub release, the `release` branch games follow, and the Fab checklist. |
 | [`plugin/docs`](plugin/docs/action.yml) | Builds `Content/Docs` into a docs bundle and checks it; for a release, zips it. |
@@ -192,10 +198,30 @@ It runs the runner as a service under its own account, kept out of other runners
 SteamCMD. Builds keep their caches in the runner's own workspace, never in the engine's
 machine-wide defaults. `.\runner\Get-DiskReport.ps1` shows what is using the disk.
 
+A Mac runner needs:
+
+- the same engine versions from the Epic Games Launcher, installed by the user the runner runs as or
+  in the default `/Users/Shared/Epic Games` (or `UE_ROOT_5_8` and so on pointing at them);
+- Xcode, opened once to accept its license, and selected with `sudo xcode-select -s /Applications/Xcode.app`
+  (the command line tools alone are not enough for UnrealBuildTool);
+- PowerShell 7 (`brew install --cask powershell`) as `pwsh`; run `./env.sh` in the runner's folder
+  afterwards, so the runner service's `PATH` has it;
+- the labels `self-hosted`, `macOS` and `unreal`, and a runner group that allows public repositories,
+  since some plugins are public.
+
+Its caches stay in the runner's workspace too, out of the default `~/.epic` folder.
+
 For public repositories, require approval for workflows from all outside contributors (the
-organization's Settings > Actions > General), and read a pull request before approving it.
+organization's Settings > Actions > General), and read a pull request before approving it. Both build
+machines run code from a pull request once it is approved.
 
 ## Changing this repository
 
-Callers use `@v1`; move that tag once a change has run on a real project. `tests\Invoke-SelfTest.ps1`
-runs without an engine. Scripts stay ASCII and Windows PowerShell 5.1 compatible.
+Callers use `@v1`; move that tag once a change has run on a real project. `plugin.yml` calls the
+actions at `@v1` too, so a project pointed at `plugin.yml@my-branch` still runs the old actions. To
+try a branch, also change each `KhaosSystems/unreal-actions/...@v1` in `plugin.yml` to `@my-branch`
+(or to a temporary tag such as `v1-next`) in a commit, and revert it before merging.
+
+`tests\Invoke-SelfTest.ps1` runs without an engine, under Windows PowerShell 5.1 and under
+PowerShell 7 on a Mac; CI runs it on both. Scripts stay ASCII and Windows PowerShell 5.1 compatible,
+and what the Mac build uses also runs under PowerShell 7, with paths built by `Join-Paths`.
