@@ -772,18 +772,38 @@ try
 	$B = Get-PluginBadges -Engines @('5.8') -Results @() -Lines 999
 	Check 'no results reads as not run' ((Badge $B 'tests.json').message -eq 'not run' -and (Badge $B 'loc.json').message -eq '999')
 
+	function Built($Platform, $Engine, $Result) { return [pscustomobject]@{ platform = $Platform; engine = $Engine; result = $Result } }
+	$AllBuilt = @((Built 'Win64' '5.7' 'success'), (Built 'Win64' '5.8' 'success'), (Built 'Mac' '5.7' 'success'), (Built 'Mac' '5.8' 'success'))
+	$B = Get-PluginBadges -Engines @('5.7', '5.8') -Lines 10 -Builds $AllBuilt
+	Check 'a platform that built every engine lists them, in green' ((Badge $B 'windows.json').message -eq '5.7 | 5.8' -and (Badge $B 'windows.json').color -eq 'brightgreen' -and (Badge $B 'macos.json').label -eq 'macOS' -and (Badge $B 'macos.json').message -eq '5.7 | 5.8')
+	$B = Get-PluginBadges -Engines @('5.7', '5.8') -Lines 10 -Builds @((Built 'Win64' '5.7' 'success'), (Built 'Win64' '5.8' 'success'), (Built 'Mac' '5.7' 'success'), (Built 'Mac' '5.8' 'failure'))
+	Check 'a platform names the engine that failed, in red' ((Badge $B 'macos.json').message -eq '5.8 failing' -and (Badge $B 'macos.json').color -eq 'red' -and (Badge $B 'windows.json').color -eq 'brightgreen')
+	$B = Get-PluginBadges -Engines @('5.7', '5.8') -Lines 10 -Builds @((Built 'Win64' '5.8' 'success'))
+	Check 'an engine with no build result counts as failing' ((Badge $B 'windows.json').message -eq '5.7 failing' -and (Badge $B 'macos.json').message -eq 'failing')
+	$B = Get-PluginBadges -Engines @('5.8') -Lines 10 -Builds @((Built 'Win64' '5.8' 'skipped'))
+	Check 'a skipped build is not a pass' ((Badge $B 'windows.json').message -eq 'failing')
+	$B = Get-PluginBadges -Engines @('5.8') -Lines 10 -Builds $AllBuilt -MacBuild 'unsupported'
+	Check 'a plugin without Mac support says so, in grey' ((Badge $B 'macos.json').message -eq 'not supported' -and (Badge $B 'macos.json').color -eq 'lightgrey')
+	$B = Get-PluginBadges -Engines @('5.8') -Lines 10 -MacBuild 'off'
+	Check 'a Mac build turned off reads as not built' ((Badge $B 'macos.json').message -eq 'not built')
+
 	# The whole badges script, pushing to a local repository instead of GitHub.
 	$Remote = Join-Paths $Temp 'remote.git'
 	$null = Invoke-NativeQuiet git @('init', '-q', '--bare', $Remote)
 	$Results = Join-Paths $Temp 'results'
 	New-TestFile "$Results/test-results-UE5.8/test-results.json" '{"engine":"5.8","passed":21,"failed":0,"total":21,"note":""}'
 	$BadgeScript = Join-Path $Root 'plugin/badges/Update-Badges.ps1'
-	$First = (& $BadgeScript -PluginDir $Plugin -EngineVersions '5.8' -ResultsDir $Results -Repository 'test/test' -RemoteUrl $Remote 6>&1 | Out-String)
+	$BuildResults = Join-Paths $Temp 'builds'
+	New-TestFile "$BuildResults/build-result-Win64-UE5.8/build-result.json" '{"platform":"Win64","engine":"5.8","result":"success"}'
+	New-TestFile "$BuildResults/build-result-Mac-UE5.8/build-result.json" '{"platform":"Mac","engine":"5.8","result":"failure"}'
+	$First = (& $BadgeScript -PluginDir $Plugin -EngineVersions '5.8' -ResultsDir $Results -BuildsDir $BuildResults -Repository 'test/test' -RemoteUrl $Remote 6>&1 | Out-String)
 	$Files = (Invoke-NativeQuiet git @('--git-dir', $Remote, 'ls-tree', '--name-only', 'badges')).Output
-	Check 'badges are pushed to their own branch' ((Same ($Files | Sort-Object) @('loc.json', 'tests.json', 'unreal.json')) -and $First.Contains('Updated the badges')) "$First $Files"
+	Check 'badges are pushed to their own branch' ((Same ($Files | Sort-Object) @('loc.json', 'macos.json', 'tests.json', 'unreal.json', 'windows.json')) -and $First.Contains('Updated the badges')) "$First $Files"
 	$Tests = (Invoke-NativeQuiet git @('--git-dir', $Remote, 'show', 'badges:tests.json')).Output -join ''
 	Check 'the pushed tests badge has the results' (($Tests | ConvertFrom-Json).message -eq '21 passed')
-	$Second = (& $BadgeScript -PluginDir $Plugin -EngineVersions '5.8' -ResultsDir $Results -Repository 'test/test' -RemoteUrl $Remote 6>&1 | Out-String)
+	$Mac = (Invoke-NativeQuiet git @('--git-dir', $Remote, 'show', 'badges:macos.json')).Output -join ''
+	Check 'the pushed macOS badge has the build result' (($Mac | ConvertFrom-Json).message -eq 'failing')
+	$Second = (& $BadgeScript -PluginDir $Plugin -EngineVersions '5.8' -ResultsDir $Results -BuildsDir $BuildResults -Repository 'test/test' -RemoteUrl $Remote 6>&1 | Out-String)
 	$Commits = (Invoke-NativeQuiet git @('--git-dir', $Remote, 'rev-list', '--count', 'badges')).Output
 	Check 'unchanged badges make no commit' ($Second.Contains('Badges unchanged') -and $Commits -eq '1') "$Second $Commits"
 

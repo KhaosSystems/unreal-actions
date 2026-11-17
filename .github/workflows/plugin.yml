@@ -260,6 +260,20 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # For the Windows badge: whether this engine version built, tests aside.
+      - name: Record build result
+        if: always()
+        shell: powershell
+        run: Set-Content -Path "$env:RUNNER_TEMP\build-result.json" -Value '{"platform":"Win64","engine":"${{ matrix.engine }}","result":"${{ steps.build.outcome }}"}'
+
+      - name: Upload build result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-result-Win64-UE${{ matrix.engine }}
+          path: ${{ runner.temp }}\build-result.json
+          retention-days: 1
+
       # Prebuilt for Win64, for anyone on the team who wants the plugin without compiling it.
       - name: Upload built plugin
         uses: actions/upload-artifact@v7
@@ -314,6 +328,20 @@ jobs:
           path: ${{ runner.temp }}/b/logs
           if-no-files-found: ignore
           retention-days: 14
+
+      # For the macOS badge: whether this engine version built.
+      - name: Record build result
+        if: always()
+        shell: pwsh
+        run: Set-Content -Path "$env:RUNNER_TEMP/build-result.json" -Value '{"platform":"Mac","engine":"${{ matrix.engine }}","result":"${{ steps.build.outcome }}"}'
+
+      - name: Upload build result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-result-Mac-UE${{ matrix.engine }}
+          path: ${{ runner.temp }}/build-result.json
+          retention-days: 1
 
   release:
     name: Publish release
@@ -398,7 +426,7 @@ jobs:
 
   badges:
     name: Badges
-    needs: [package, build]
+    needs: [package, build, mac]
     # Also after a failed build, so the badges show it. shields.io can only read public repositories.
     if: >-
       always() && needs.package.result == 'success' && github.event_name == 'push'
@@ -416,11 +444,18 @@ jobs:
           pattern: test-results-*
           path: results
 
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: build-result-*
+          path: builds
+
       - uses: KhaosSystems/unreal-actions/plugin/badges@v1
         with:
           plugin-dir: plugin
           engine-versions: ${{ inputs.engine-versions }}
           results-dir: results
+          builds-dir: builds
+          mac-build: ${{ inputs.mac-build-runner == '' && 'off' || (needs.package.outputs.mac == 'false' && 'unsupported' || 'on') }}
 
   notify:
     name: Notify

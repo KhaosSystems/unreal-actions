@@ -72,7 +72,7 @@ the Fab publisher portal. Pushing a `vX.Y.Z` tag yourself still works too.
 | [`plugin/release`](plugin/release/action.yml) | GitHub release, the `release` branch games follow, and the Fab checklist. |
 | [`plugin/docs`](plugin/docs/action.yml) | Builds `Content/Docs` into a docs bundle and checks it; for a release, zips it. |
 | [`plugin/publish-docs`](plugin/publish-docs/action.yml) | Pushes a docs bundle to `KhaosSystems/docs-content`, which deploys the docs site. |
-| [`plugin/badges`](plugin/badges/action.yml) | Tests, engine versions and lines of code, for the README. Public repositories only. |
+| [`plugin/badges`](plugin/badges/action.yml) | Tests, engine versions, lines of code and the Windows and Mac builds, for the README. Public repositories only. |
 | [`commits/check`](commits/check/action.yml) | Fails when a commit message is not a conventional commit. |
 | [`commits/next-version`](commits/next-version/action.yml) | The next semver version from the commits since the last release. |
 | [`game/update-plugin`](game/update-plugin/action.yml) | In a game: a pull request that updates its copy of a private plugin to the latest release. |
@@ -126,7 +126,11 @@ use that folder as `-OutDir`. The website's `docs/README.md` has the details.
 ![Unreal Engine](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/OWNER/REPO/badges/unreal.json)
 ![Lines of code](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/OWNER/REPO/badges/loc.json)
 [![Release](https://img.shields.io/github/v/release/OWNER/REPO)](https://github.com/OWNER/REPO/releases)
+[![Windows](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/OWNER/REPO/badges/windows.json)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![macOS](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/OWNER/REPO/badges/macos.json)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
 ```
+
+The Windows and macOS badges list the engine versions that build, or the ones that failed in red.
 
 ### Using a plugin in a game
 

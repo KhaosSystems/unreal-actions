@@ -1,5 +1,5 @@
 name: Unreal plugin badges
-description: Publish tests, supported engine versions and lines of code as shields.io badges on a branch of their own. Public repositories only.
+description: Publish tests, supported engine versions, lines of code and the Windows and Mac builds as shields.io badges on a branch of their own. Public repositories only.
 
 inputs:
   plugin-dir:
@@ -11,6 +11,12 @@ inputs:
   results-dir:
     description: Folder with the test action's results files, in any subfolders.
     default: ''
+  builds-dir:
+    description: Folder with each build job's build-result.json, in any subfolders.
+    default: ''
+  mac-build:
+    description: on, unsupported (no module allows Mac) or off (the Mac build is turned off).
+    default: 'on'
   branch:
     description: Branch the badge files are written to.
     default: badges
@@ -30,7 +36,9 @@ runs:
         PLUGIN_DIR: ${{ inputs.plugin-dir }}
         ENGINE_VERSIONS: ${{ inputs.engine-versions }}
         RESULTS_DIR: ${{ inputs.results-dir }}
+        BUILDS_DIR: ${{ inputs.builds-dir }}
+        MAC_BUILD: ${{ inputs.mac-build }}
         BRANCH: ${{ inputs.branch }}
         REPOSITORY: ${{ inputs.repository }}
       run: |
-        & "$env:GITHUB_ACTION_PATH\Update-Badges.ps1" -PluginDir $env:PLUGIN_DIR -EngineVersions $env:ENGINE_VERSIONS -ResultsDir $env:RESULTS_DIR -Repository $env:REPOSITORY -Branch $env:BRANCH
+        & "$env:GITHUB_ACTION_PATH\Update-Badges.ps1" -PluginDir $env:PLUGIN_DIR -EngineVersions $env:ENGINE_VERSIONS -ResultsDir $env:RESULTS_DIR -BuildsDir $env:BUILDS_DIR -MacBuild $env:MAC_BUILD -Repository $env:REPOSITORY -Branch $env:BRANCH

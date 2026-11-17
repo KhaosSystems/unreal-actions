@@ -1,9 +1,10 @@
 <#
 .SYNOPSIS
-Publish a plugin's badges: tests, supported engine versions and lines of code.
+Publish a plugin's badges: tests, supported engine versions, lines of code and platform builds.
 
 .DESCRIPTION
-Writes shields.io endpoint files (tests.json, unreal.json, loc.json) to a branch of their own,
+Writes shields.io endpoint files (tests.json, unreal.json, loc.json, windows.json, macos.json)
+to a branch of their own,
 which a README shows through https://img.shields.io/endpoint?url=<raw file URL>. Only public
 repositories work: shields.io reads the files without signing in.
 
@@ -19,6 +20,12 @@ param(
 
 	# Folder holding the test-results.json of each engine version, in any subfolders.
 	[string]$ResultsDir,
+
+	# Folder holding each build job's build-result.json ({ platform, engine, result }), in any subfolders.
+	[string]$BuildsDir,
+
+	# on, unsupported (no module allows Mac) or off (the Mac build is turned off).
+	[ValidateSet('on', 'unsupported', 'off')][string]$MacBuild = 'on',
 
 	[Parameter(Mandatory)][string]$Repository,
 	[string]$Branch = 'badges',
@@ -43,7 +50,12 @@ if ($ResultsDir -and (Test-Path -LiteralPath $ResultsDir))
 {
 	$Results = @(Get-ChildItem -LiteralPath $ResultsDir -Filter '*.json' -Recurse | ForEach-Object { [IO.File]::ReadAllText($_.FullName) | ConvertFrom-Json })
 }
-$Badges = Get-PluginBadges -Engines $Engines -Results $Results -Lines (Measure-PluginSource $Descriptor)
+$Builds = @()
+if ($BuildsDir -and (Test-Path -LiteralPath $BuildsDir))
+{
+	$Builds = @(Get-ChildItem -LiteralPath $BuildsDir -Filter '*.json' -Recurse | ForEach-Object { [IO.File]::ReadAllText($_.FullName) | ConvertFrom-Json })
+}
+$Badges = Get-PluginBadges -Engines $Engines -Results $Results -Lines (Measure-PluginSource $Descriptor) -Builds $Builds -MacBuild $MacBuild
 
 $Work = Join-Paths ([IO.Path]::GetTempPath()) ('badges-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $Work -Force | Out-Null
