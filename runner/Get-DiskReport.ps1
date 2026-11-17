@@ -156,7 +156,7 @@ Add-Known 'C:\ProgramData\Epic\UnrealBuildAccelerator' 'UBA store shared by ever
 Add-Known 'C:\ProgramData\Epic\EpicGamesLauncher\VaultCache' 'Fab/Marketplace download cache. Safe to delete.'
 Add-Known 'C:\ProgramData\Microsoft\VisualStudio\Packages' 'Visual Studio download cache. Safe to delete if the installer has "Keep download cache" off.'
 Add-Known 'C:\ProgramData\Package Cache' 'Installer cache for repair and uninstall. Do not delete by hand.'
-Add-Known 'C:\steamcmd' 'SteamCMD, used by the WhatSub deploy. Leave it.'
+Add-Known 'C:\steamcmd' 'SteamCMD, used by another deploy on this machine. Leave it.'
 
 foreach ($UserDir in $UserDirs)
 {

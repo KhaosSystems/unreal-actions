@@ -1,5 +1,5 @@
 name: Unreal plugin docs
-description: Build a plugin's Content/Docs into a bundle for docs.khaos.systems and check it against the site's rules. For a release, also zip it.
+description: Build a plugin's Docs folder, beside its .uplugin, into a bundle for docs.khaos.systems and check it against the site's rules. For a release, also zip it.
 
 inputs:
   plugin-dir:
@@ -29,10 +29,10 @@ inputs:
 
 outputs:
   bundle-dir:
-    description: The bundle, <out-dir>/<section>/<slug>/<version>. Empty when the plugin has no Content/Docs.
+    description: The bundle, <out-dir>/<section>/<slug>/<version>. Empty when the plugin has no Docs folder.
     value: ${{ steps.docs.outputs.bundle-dir }}
   folder:
-    description: The bundle's <section>/<slug>/<version>, below out-dir. Empty when the plugin has no Content/Docs.
+    description: The bundle's <section>/<slug>/<version>, below out-dir. Empty when the plugin has no Docs folder.
     value: ${{ steps.docs.outputs.folder }}
   zip:
     description: The release's <Repo>-<version>-docs.zip, with a .sha256 beside it. Empty without a tag.
