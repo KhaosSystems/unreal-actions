@@ -260,6 +260,10 @@ $MachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine').Split(';
 $Git = $MachinePath | Where-Object { Test-Path -LiteralPath (Join-Paths $_ 'git.exe') } | Select-Object -First 1
 if ($Git) { Write-Host "  Git in the machine PATH ($Git)" }
 else { Write-Problem "git.exe is not on the machine-wide PATH, so the runner's account will not find it. Install Git for Windows for all users." }
+# The release and docs jobs run here too, and publish with the GitHub CLI.
+$Gh = $MachinePath | Where-Object { Test-Path -LiteralPath (Join-Paths $_ 'gh.exe') } | Select-Object -First 1
+if ($Gh) { Write-Host "  GitHub CLI in the machine PATH ($Gh)" }
+else { Write-Problem "gh.exe is not on the machine-wide PATH, so releases cannot be published. Install it for all users: winget install --id GitHub.cli --scope machine" }
 
 # The runner's account has no user-level policy of its own, so the machine's decides.
 $Policy = [string](Get-ExecutionPolicy -Scope MachinePolicy)

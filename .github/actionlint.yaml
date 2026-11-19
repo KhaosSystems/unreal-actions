@@ -1,0 +1,4 @@
+# Labels of the organization's own runners, which actionlint cannot know.
+self-hosted-runner:
+  labels:
+    - unreal
