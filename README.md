@@ -184,7 +184,7 @@ permissions:
 
 jobs:
   update:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows]
     strategy:
       fail-fast: false
       matrix:
@@ -203,8 +203,10 @@ know nothing of the games that use them.
 
 ## Build machine
 
-Windows with the engine versions from the Epic Games Launcher and Visual Studio's C++ tools. Set
-up a runner from an elevated PowerShell (`-WhatIf` first shows what it would do):
+Windows with the engine versions from the Epic Games Launcher, Visual Studio's C++ tools, and Git
+and the GitHub CLI installed for all users (`winget install --id GitHub.cli --scope machine`).
+Every job runs on it except the Mac build, so nothing runs on GitHub-hosted machines. Set up a
+runner from an elevated PowerShell (`-WhatIf` first shows what it would do):
 
 ```powershell
 .\runner\Install-BuildRunner.ps1 -Target my-org -Name unreal -RunnerGroup unreal -RunnerName gh-runner-windows-unreal-01
@@ -220,7 +222,7 @@ A Mac runner needs:
   in the default `/Users/Shared/Epic Games` (or `UE_ROOT_5_8` and so on pointing at them);
 - Xcode, opened once to accept its license, and selected with `sudo xcode-select -s /Applications/Xcode.app`
   (the command line tools alone are not enough for UnrealBuildTool);
-- PowerShell 7 (`brew install --cask powershell`) as `pwsh`; run `./env.sh` in the runner's folder
+- PowerShell 7 (`brew install powershell`) as `pwsh`; run `./env.sh` in the runner's folder
   afterwards, so the runner service's `PATH` has it;
 - the labels `self-hosted`, `macOS` and `unreal`, and a runner group that allows public repositories,
   since some plugins are public.

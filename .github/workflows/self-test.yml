@@ -8,10 +8,11 @@ on:
 permissions:
   contents: read
 
+# On the organization's Windows build machine, like the plugin jobs.
 jobs:
   scripts:
     name: Script tests
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, unreal]
     steps:
       - uses: actions/checkout@v7
       - shell: powershell
@@ -19,9 +20,23 @@ jobs:
 
   workflows:
     name: Lint workflows
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, unreal]
     steps:
       - uses: actions/checkout@v7
-      - uses: docker://rhysd/actionlint:1.7.7
-        with:
-          args: -color
+      # A pinned release, checked against its published checksum. Into the job's temp folder, which
+      # the runner empties after each job.
+      - name: actionlint
+        shell: powershell
+        env:
+          VERSION: '1.7.7'
+          SHA256: 7f12f1801bca3d480d67aaf7774f4c2a6359a3ca8eebe382c95c10c9704aa731
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $Zip = Join-Path $env:RUNNER_TEMP 'actionlint.zip'
+          $Dir = Join-Path $env:RUNNER_TEMP 'actionlint'
+          Invoke-WebRequest -UseBasicParsing -OutFile $Zip "https://github.com/rhysd/actionlint/releases/download/v$env:VERSION/actionlint_$($env:VERSION)_windows_amd64.zip"
+          if ((Get-FileHash $Zip -Algorithm SHA256).Hash -ne $env:SHA256) { throw 'actionlint does not match its checksum.' }
+          Expand-Archive $Zip $Dir -Force
+          & (Join-Path $Dir 'actionlint.exe') -color
+          exit $LASTEXITCODE
