@@ -21,27 +21,48 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
-    inputs:
-      release:
-        description: Release the next version
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch') }}
+  # Pushes to main run to the end: the one that merges the release pull request makes the release.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   plugin:
     uses: KhaosSystems/unreal-actions/.github/workflows/plugin.yml@v1
     permissions:
-      contents: write
+      contents: write # releases and badges
+      issues: write # release-please's labels
+      pull-requests: write # the release pull request
     with:
       engine-versions: '["5.8"]'
-      release: ${{ inputs.release == true }}
+      release-please: true
     secrets:
       discord-webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
 ```
+
+With `release-please-config.json` beside it, at the repository root:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "include-component-in-tag": false,
+  "pull-request-title-pattern": "chore: release ${version}",
+  "changelog-sections": [
+    { "type": "feat", "section": "Added" },
+    { "type": "fix", "section": "Fixed" },
+    { "type": "perf", "section": "Changed" },
+    { "type": "revert", "section": "Changed" }
+  ],
+  "packages": {
+    ".": { "extra-files": [{ "type": "json", "path": "MyPlugin.uplugin", "jsonpath": "$.VersionName" }] }
+  }
+}
+```
+
+and `.release-please-manifest.json` with the latest release, `{ ".": "1.1.0" }`, or `0.0.0` before
+the first.
 
 The plugin needs a `PlatformAllowList` on every module, a `Config/FilterPlugin.ini`, a copyright
 notice with the year and the descriptor's `CreatedBy` on the first line of every source file (such as
@@ -57,12 +78,20 @@ plugin whose modules allow Mac is built on the Mac machine too; `mac-build-runne
 **Commits** are [conventional commits](https://www.conventionalcommits.org), such as
 `fix: crash when saving` or `feat(ui): outline panel`; every pull request and push checks them.
 
-**Release:** Actions > CI > Run workflow on `main`, with *Release the next version* ticked. The
-version comes from the commits since the last release: `feat` bumps the minor version; `fix`,
-`perf` and `revert` the patch; a breaking change (`feat!:`, or a `BREAKING CHANGE:` footer) the
-major, or the minor before 1.0. Commits of other types alone release nothing. The run builds,
-tests, tags and publishes; its summary has the project file link and version notes to paste into
-the Fab publisher portal. Pushing a `vX.Y.Z` tag yourself still works too.
+**Release:** once `main` passes, [release-please](https://github.com/googleapis/release-please)
+opens or updates the release pull request, `chore: release X.Y.Z`. It sets `VersionName` in the
+.uplugin and puts the version's section at the top of `CHANGELOG.md`, one line per commit subject:
+`feat` under Added and a minor version, `fix` under Fixed and a patch, a breaking change (`feat!:`,
+or a `BREAKING CHANGE:` footer) a major version. Commits of other types are left out. Edit the
+lines in the pull request just before merging it; a later push to `main` rewrites them. Merging it
+builds and tests that commit, tags it, and publishes the release with that section as its notes;
+the run summary has the project file link and version notes to paste into the Fab publisher portal.
+`Version` in the zips is worked out from `VersionName`. The pull request runs no checks of its own:
+it is made with the run's token, whose pull requests start no workflows.
+
+Without `release-please`, a release is Actions > CI > Run workflow on `main` with `release: ${{
+inputs.release == true }}` in `with:` and a *Release the next version* input; the version comes from
+the commits the same way. Pushing a `vX.Y.Z` tag yourself works either way.
 
 | Action | |
 | --- | --- |

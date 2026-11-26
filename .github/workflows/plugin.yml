@@ -8,17 +8,21 @@
 #   build    Windows build machine. BuildPlugin on that zip, then the automation tests on the result.
 #   mac      Mac build machine, when a module allows Mac: BuildPlugin on the same zip, as Fab's Mac
 #            build does. Any compiler warning in the plugin's own sources fails either build.
-#   release  Once every engine passed on both machines, for a run with release set (the next
-#            version comes from the commit messages) or a pushed vX.Y.Z tag: GitHub release and tag,
-#            release branch, Fab checklist. With publish-docs, the docs bundle is zipped onto the
-#            release.
+#   release-please
+#            With release-please, on the default branch once every engine passed: opens or updates
+#            the release pull request, and when the push is that pull request merged, tags the
+#            version and makes its GitHub release with its CHANGELOG.md section as the notes.
+#   release  Once every engine passed on both machines, for a release made by release-please, a run
+#            with release set (the next version comes from the commit messages) or a pushed vX.Y.Z
+#            tag: the zips onto the GitHub release, release branch, Fab checklist. With
+#            publish-docs, the docs bundle is zipped onto the release.
 #   docs     With publish-docs, after the release: pushes that bundle to docs.khaos.systems.
 #   badges   On the default branch of a public repository: tests, engines, lines of code and
 #            the Windows and Mac builds.
 #   notify   Optional Discord message for releases and failures.
 #
 # Every job runs on the organization's own machines: the light ones on the Windows build machine,
-# which has Windows PowerShell 5.1 like the actions expect.
+# which has Windows PowerShell 5.1 like the actions expect, and release-please on a Linux one.
 #
 # A pull request from an outside contributor runs none of this until a maintainer has read it and
 # approved the run: the organization requires approval for all outside contributors.
@@ -55,8 +59,16 @@ on:
         description: Let compiler warnings in the plugin's own sources through. By default any warning fails the build, as Fab's review expects none.
         type: boolean
         default: false
+      release-please:
+        description: Release through a release pull request kept by release-please, from release-please-config.json and .release-please-manifest.json in the plugin repository. Merging it releases. The caller grants contents, issues and pull-requests write.
+        type: boolean
+        default: false
+      release-please-runner:
+        description: JSON array of labels for the machine release-please runs on.
+        type: string
+        default: '["self-hosted", "Linux", "X64"]'
       release:
-        description: Release the next version, worked out from the commit messages since the last release. Default branch only.
+        description: Release the next version, worked out from the commit messages since the last release. Default branch only. Not with release-please.
         type: boolean
         default: false
       publish-docs:
@@ -132,6 +144,7 @@ jobs:
       - id: kind
         shell: powershell
         env:
+          RELEASE_PLEASE: ${{ inputs.release-please }}
           RELEASE_INPUT: ${{ inputs.release }}
           NEXT_TAG: ${{ steps.next.outputs.tag }}
           REF_TYPE: ${{ github.ref_type }}
@@ -139,6 +152,10 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           $Tag = ''
+          if ($env:RELEASE_INPUT -eq 'true' -and $env:RELEASE_PLEASE -eq 'true')
+          {
+            throw 'This plugin releases through its release pull request: merge that instead of ticking release.'
+          }
           if ($env:RELEASE_INPUT -eq 'true')
           {
             if ($env:REF_NAME -ne $env:DEFAULT_BRANCH) { throw "Release from $env:DEFAULT_BRANCH, not $env:REF_NAME." }
@@ -151,6 +168,18 @@ jobs:
           $Release = [bool]$Tag
           "release=$($Release.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
           "tag=$Tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+          # With release-please the descriptor holds the version: its release pull request sets
+          # VersionName. Every zip is stamped with it, so the push that merges that pull request
+          # builds and tests exactly the zips the release gets.
+          $Stamp = $Tag
+          if (-not $Stamp -and $env:RELEASE_PLEASE -eq 'true')
+          {
+            $Descriptor = Get-ChildItem -Path plugin -Filter '*.uplugin' | Select-Object -First 1
+            $VersionName = [string]((Get-Content -Raw -LiteralPath $Descriptor.FullName | ConvertFrom-Json).VersionName)
+            if ($VersionName -match '^\d+\.\d+\.\d+$') { $Stamp = "v$VersionName" }
+            else { Write-Host "::warning title=No version to stamp::VersionName $VersionName is not X.Y.Z; release-please sets it with the next release." }
+          }
+          "stamp=$Stamp" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
 
       - name: Deprecated inputs
         if: inputs.vendor-to != '[]'
@@ -185,7 +214,7 @@ jobs:
         with:
           plugin-dir: plugin
           engine-versions: ${{ inputs.engine-versions }}
-          version: ${{ steps.kind.outputs.tag }}
+          version: ${{ steps.kind.outputs.stamp }}
 
       - name: Mac build
         if: inputs.mac-build-runner != '' && steps.package.outputs.mac == 'false'
@@ -354,14 +383,39 @@ jobs:
           path: ${{ runner.temp }}/build-result.json
           retention-days: 1
 
+  # Only after everything passed, so the release pull request and the release only ever come from
+  # tested commits. With the run's own token, the release pull request itself runs no checks: what
+  # it changes is the changelog and the version, and merging it runs everything on main.
+  release-please:
+    name: Release pull request
+    needs: [package, build, mac]
+    if: >-
+      inputs.release-please && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+      && !cancelled() && needs.package.result == 'success' && needs.build.result == 'success'
+      && (needs.mac.result == 'success' || needs.mac.result == 'skipped')
+    runs-on: ${{ fromJSON(inputs.release-please-runner) }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release-created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v5
+
   release:
     name: Publish release
-    needs: [package, build, mac]
+    needs: [package, build, mac, release-please]
     # The Mac build is skipped when it is turned off or the package step says no module allows Mac;
-    # otherwise it must pass.
+    # otherwise it must pass. release-please is skipped unless it is on.
     # A skipped need would skip this job without the explicit checks.
     if: >-
-      needs.package.outputs.release == 'true' && !cancelled() && needs.package.result == 'success'
+      (needs.package.outputs.release == 'true' || needs.release-please.outputs.release-created == 'true')
+      && !cancelled() && needs.package.result == 'success'
       && needs.build.result == 'success' && (needs.mac.result == 'success' || needs.mac.result == 'skipped')
     runs-on: ${{ fromJSON(inputs.build-runner) }}
     permissions:
@@ -388,6 +442,17 @@ jobs:
           name: source-packages
           path: dist
 
+      # The zips carry the descriptor's version; release-please released the manifest's. They match
+      # unless VersionName was changed by hand.
+      - name: Check version
+        if: needs.release-please.outputs.release-created == 'true'
+        shell: powershell
+        env:
+          PACKAGED: ${{ needs.package.outputs.version }}
+          RELEASED: ${{ needs.release-please.outputs.version }}
+        run: |
+          if ($env:PACKAGED -ne $env:RELEASED) { throw "release-please released $env:RELEASED, but the zips are $env:PACKAGED. Set VersionName in the .uplugin to $env:RELEASED and re-run." }
+
       # Built from the commit being released and checked before anything is published, so a docs
       # problem stops the release instead of leaving it half done.
       - id: docs
@@ -396,7 +461,7 @@ jobs:
         with:
           plugin-dir: plugin
           engine-versions: ${{ inputs.engine-versions }}
-          tag: ${{ needs.package.outputs.tag }}
+          tag: ${{ needs.package.outputs.tag || needs.release-please.outputs.tag }}
           strict: 'true'
           private: ${{ github.event.repository.private }}
           out-dir: docs-dist
@@ -416,7 +481,7 @@ jobs:
         with:
           plugin-dir: plugin
           packages-dir: dist
-          tag: ${{ needs.package.outputs.tag }}
+          tag: ${{ needs.package.outputs.tag || needs.release-please.outputs.tag }}
           target: ${{ github.sha }}
           docs-zip: ${{ steps.docs.outputs.zip }}
 

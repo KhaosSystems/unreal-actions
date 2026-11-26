@@ -16,6 +16,10 @@ The tag is created with the release when it does not exist yet, as for a version
 the commit messages; give the commit with -Target. Re-running a release replaces the zips on the
 existing release rather than failing, and refreshes the docs zip's checksum in its notes.
 
+A release that already exists without packages, as release-please makes it, keeps its notes (its
+CHANGELOG.md section) as the version notes, and gets the packages, the plugin's name as its title,
+and the zips.
+
 A docs zip, given with -DocsZip, is attached too, but kept out of the package table and the Fab
 checklist: only <Plugin>-<version>-UE<engine>.zip files are packages.
 
@@ -49,8 +53,21 @@ if ($DocsZip -and -not (Test-Path -LiteralPath "$DocsZip.sha256")) { throw "$Doc
 $TagExists = (Invoke-NativeQuiet gh @('api', "repos/$Repository/git/ref/tags/$Tag")).ExitCode -eq 0
 if (-not $TagExists -and -not $Target) { throw "Tag $Tag does not exist; give the commit to release with -Target." }
 
-# The checkout is at the commit being released, tagged or not yet.
-$VersionNotes = Get-ReleaseNotes -RepoDir $PluginDir -Ref 'HEAD'
+# An existing release's notes are the version notes: everything above its packages. A release
+# without packages yet was made by release-please and gets them now.
+$Existing = Invoke-NativeQuiet gh @('release', 'view', $Tag, '--repo', $Repository, '--json', 'body', '--jq', '.body')
+$ReleaseExists = $Existing.ExitCode -eq 0
+$ExistingBody = ($Existing.Output -join "`n").Trim()
+$NeedsPackages = $ReleaseExists -and $ExistingBody -notmatch '(?m)^### Packages'
+if ($ReleaseExists)
+{
+	$VersionNotes = ($ExistingBody -split '(?m)^### Packages', 2)[0].Trim()
+}
+else
+{
+	# The checkout is at the commit being released, tagged or not yet.
+	$VersionNotes = Get-ReleaseNotes -RepoDir $PluginDir -Ref 'HEAD'
+}
 
 $Checksums = @('| Package | SHA-256 |', '| --- | --- |')
 foreach ($Zip in $Zips)
@@ -84,7 +101,15 @@ $Assets = @($Zips | ForEach-Object { $_.FullName })
 $Assets += @($Zips | ForEach-Object { "$($_.FullName).sha256" } | Where-Object { Test-Path -LiteralPath $_ })
 if ($DocsZip) { $Assets += @($DocsZip, "$DocsZip.sha256") }
 
-if ((Invoke-NativeQuiet gh @('release', 'view', $Tag, '--repo', $Repository)).ExitCode -eq 0)
+if ($NeedsPackages)
+{
+	Write-Host "Release $Tag exists without packages; adding them."
+	& gh release upload $Tag @Assets --repo $Repository --clobber
+	if ($LASTEXITCODE -ne 0) { throw "Uploading to release $Tag failed." }
+	& gh release edit $Tag --repo $Repository --title "$($Descriptor.Name) $($Release.VersionName)" --notes-file $NotesFile
+	if ($LASTEXITCODE -ne 0) { throw "Adding the packages to the notes of release $Tag failed." }
+}
+elseif ($ReleaseExists)
 {
 	Write-Host "Release $Tag exists; replacing its packages."
 	& gh release upload $Tag @Assets --repo $Repository --clobber
